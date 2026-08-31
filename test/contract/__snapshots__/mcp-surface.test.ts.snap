@@ -1,0 +1,936 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`MCP compatibility surface keeps initialize identity, instructions, and exact tool catalog stable 1`] = `
+[
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "readOnlyHint": false,
+    },
+    "description": "Create one graph edge or up to 10 ordered, non-atomic edge operations between notes in the same selected project; inspect every result because earlier links remain applied if a later item fails. Cross-project links are rejected. Predicates: SUPPORTS, DERIVED_FROM, PART_OF, ABOUT, PRECEDES, SUPERSEDES.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "predicate": {
+              "enum": [
+                "SUPPORTS",
+                "DERIVED_FROM",
+                "PART_OF",
+                "ABOUT",
+                "PRECEDES",
+                "SUPERSEDES",
+              ],
+              "type": "string",
+            },
+            "projectID": {
+              "description": "The immutable project UUID returned by project_create or project_list.",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+            "sourceID": {
+              "type": "string",
+            },
+            "targetID": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "sourceID",
+            "targetID",
+            "predicate",
+            "projectID",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "links": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "predicate": {
+                    "enum": [
+                      "SUPPORTS",
+                      "DERIVED_FROM",
+                      "PART_OF",
+                      "ABOUT",
+                      "PRECEDES",
+                      "SUPERSEDES",
+                    ],
+                    "type": "string",
+                  },
+                  "sourceID": {
+                    "type": "string",
+                  },
+                  "targetID": {
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "sourceID",
+                  "targetID",
+                  "predicate",
+                ],
+                "type": "object",
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array",
+            },
+            "projectID": {
+              "description": "The immutable project UUID returned by project_create or project_list.",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+          },
+          "required": [
+            "projectID",
+            "links",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "predicate": {
+              "enum": [
+                "SUPPORTS",
+                "DERIVED_FROM",
+                "PART_OF",
+                "ABOUT",
+                "PRECEDES",
+                "SUPERSEDES",
+              ],
+              "type": "string",
+            },
+            "projectName": {
+              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string",
+            },
+            "sourceID": {
+              "type": "string",
+            },
+            "targetID": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "sourceID",
+            "targetID",
+            "predicate",
+            "projectName",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "links": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "predicate": {
+                    "enum": [
+                      "SUPPORTS",
+                      "DERIVED_FROM",
+                      "PART_OF",
+                      "ABOUT",
+                      "PRECEDES",
+                      "SUPERSEDES",
+                    ],
+                    "type": "string",
+                  },
+                  "sourceID": {
+                    "type": "string",
+                  },
+                  "targetID": {
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "sourceID",
+                  "targetID",
+                  "predicate",
+                ],
+                "type": "object",
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array",
+            },
+            "projectName": {
+              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          "required": [
+            "projectName",
+            "links",
+          ],
+          "type": "object",
+        },
+      ],
+      "type": "object",
+    },
+    "name": "memory_link",
+    "title": "Link project memories",
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "readOnlyHint": false,
+    },
+    "description": "Set the pinned state of one active note inside one selected project. Pinned matching notes are prioritized in recall results. This tool never deletes content.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+            },
+            "pinned": {
+              "type": "boolean",
+            },
+            "projectID": {
+              "description": "The immutable project UUID returned by project_create or project_list.",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+          },
+          "required": [
+            "projectID",
+            "id",
+            "pinned",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+            },
+            "pinned": {
+              "type": "boolean",
+            },
+            "projectName": {
+              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          "required": [
+            "projectName",
+            "id",
+            "pinned",
+          ],
+          "type": "object",
+        },
+      ],
+      "type": "object",
+    },
+    "name": "memory_pin",
+    "title": "Pin or unpin project memory",
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "readOnlyHint": true,
+    },
+    "description": "Read one note or up to 10 notes from one selected project, including full content, pin state, project identity, and same-project graph edges.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+            },
+            "projectID": {
+              "description": "The immutable project UUID returned by project_create or project_list.",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+          },
+          "required": [
+            "projectID",
+            "id",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ids": {
+              "items": {
+                "type": "string",
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array",
+            },
+            "projectID": {
+              "description": "The immutable project UUID returned by project_create or project_list.",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+          },
+          "required": [
+            "projectID",
+            "ids",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+            },
+            "projectName": {
+              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          "required": [
+            "projectName",
+            "id",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ids": {
+              "items": {
+                "type": "string",
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array",
+            },
+            "projectName": {
+              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          "required": [
+            "projectName",
+            "ids",
+          ],
+          "type": "object",
+        },
+      ],
+      "type": "object",
+    },
+    "name": "memory_read",
+    "title": "Read project memory",
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "readOnlyHint": true,
+    },
+    "description": "Search memory only inside one project selected by immutable projectID or unique projectName. Pass one query or up to 10 queries. Indexed cards require memory_read for full content.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "projectID": {
+              "description": "The immutable project UUID returned by project_create or project_list.",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+            "query": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "projectID",
+            "query",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "projectID": {
+              "description": "The immutable project UUID returned by project_create or project_list.",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+            "queries": {
+              "items": {
+                "type": "string",
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array",
+            },
+          },
+          "required": [
+            "projectID",
+            "queries",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "projectName": {
+              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string",
+            },
+            "query": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "projectName",
+            "query",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "projectName": {
+              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string",
+            },
+            "queries": {
+              "items": {
+                "type": "string",
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array",
+            },
+          },
+          "required": [
+            "projectName",
+            "queries",
+          ],
+          "type": "object",
+        },
+      ],
+      "type": "object",
+    },
+    "name": "memory_recall",
+    "title": "Search project memory",
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "readOnlyHint": false,
+    },
+    "description": "Create or patch notes only inside one selected project. Setting delete:true permanently deletes only the specified note from that project; verify the note ID before using delete. A batch contains up to 10 ordered, non-atomic updates: inspect every result because earlier items remain applied if a later item fails. Do not batch destructive deletes unless partial completion is acceptable. Pin state is changed only through memory_pin.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string",
+            },
+            "kind": {
+              "enum": [
+                "decision",
+                "fact",
+                "procedure",
+                "context",
+                "research",
+                "preference",
+                "task",
+              ],
+              "type": "string",
+            },
+            "projectID": {
+              "description": "The immutable project UUID returned by project_create or project_list.",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+            "summary": {
+              "type": "string",
+            },
+            "title": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "kind",
+            "title",
+            "summary",
+            "projectID",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string",
+            },
+            "delete": {
+              "type": "boolean",
+            },
+            "id": {
+              "type": "string",
+            },
+            "kind": {
+              "enum": [
+                "decision",
+                "fact",
+                "procedure",
+                "context",
+                "research",
+                "preference",
+                "task",
+              ],
+              "type": "string",
+            },
+            "projectID": {
+              "description": "The immutable project UUID returned by project_create or project_list.",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+            "summary": {
+              "type": "string",
+            },
+            "title": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "id",
+            "projectID",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "projectID": {
+              "description": "The immutable project UUID returned by project_create or project_list.",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+            "updates": {
+              "items": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content": {
+                        "type": "string",
+                      },
+                      "kind": {
+                        "enum": [
+                          "decision",
+                          "fact",
+                          "procedure",
+                          "context",
+                          "research",
+                          "preference",
+                          "task",
+                        ],
+                        "type": "string",
+                      },
+                      "summary": {
+                        "type": "string",
+                      },
+                      "title": {
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "kind",
+                      "title",
+                      "summary",
+                    ],
+                    "type": "object",
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content": {
+                        "type": "string",
+                      },
+                      "delete": {
+                        "type": "boolean",
+                      },
+                      "id": {
+                        "type": "string",
+                      },
+                      "kind": {
+                        "enum": [
+                          "decision",
+                          "fact",
+                          "procedure",
+                          "context",
+                          "research",
+                          "preference",
+                          "task",
+                        ],
+                        "type": "string",
+                      },
+                      "summary": {
+                        "type": "string",
+                      },
+                      "title": {
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "id",
+                    ],
+                    "type": "object",
+                  },
+                ],
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array",
+            },
+          },
+          "required": [
+            "projectID",
+            "updates",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string",
+            },
+            "kind": {
+              "enum": [
+                "decision",
+                "fact",
+                "procedure",
+                "context",
+                "research",
+                "preference",
+                "task",
+              ],
+              "type": "string",
+            },
+            "projectName": {
+              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string",
+            },
+            "summary": {
+              "type": "string",
+            },
+            "title": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "kind",
+            "title",
+            "summary",
+            "projectName",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string",
+            },
+            "delete": {
+              "type": "boolean",
+            },
+            "id": {
+              "type": "string",
+            },
+            "kind": {
+              "enum": [
+                "decision",
+                "fact",
+                "procedure",
+                "context",
+                "research",
+                "preference",
+                "task",
+              ],
+              "type": "string",
+            },
+            "projectName": {
+              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string",
+            },
+            "summary": {
+              "type": "string",
+            },
+            "title": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "id",
+            "projectName",
+          ],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "projectName": {
+              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string",
+            },
+            "updates": {
+              "items": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content": {
+                        "type": "string",
+                      },
+                      "kind": {
+                        "enum": [
+                          "decision",
+                          "fact",
+                          "procedure",
+                          "context",
+                          "research",
+                          "preference",
+                          "task",
+                        ],
+                        "type": "string",
+                      },
+                      "summary": {
+                        "type": "string",
+                      },
+                      "title": {
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "kind",
+                      "title",
+                      "summary",
+                    ],
+                    "type": "object",
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content": {
+                        "type": "string",
+                      },
+                      "delete": {
+                        "type": "boolean",
+                      },
+                      "id": {
+                        "type": "string",
+                      },
+                      "kind": {
+                        "enum": [
+                          "decision",
+                          "fact",
+                          "procedure",
+                          "context",
+                          "research",
+                          "preference",
+                          "task",
+                        ],
+                        "type": "string",
+                      },
+                      "summary": {
+                        "type": "string",
+                      },
+                      "title": {
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "id",
+                    ],
+                    "type": "object",
+                  },
+                ],
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "type": "array",
+            },
+          },
+          "required": [
+            "projectName",
+            "updates",
+          ],
+          "type": "object",
+        },
+      ],
+      "type": "object",
+    },
+    "name": "memory_update",
+    "title": "Create, patch, or delete project memory",
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "readOnlyHint": false,
+    },
+    "description": "Create an empty memory project. The returned projectID is immutable; the unique project name may be changed later.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "projectName": {
+          "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string",
+        },
+      },
+      "required": [
+        "projectName",
+      ],
+      "type": "object",
+    },
+    "name": "project_create",
+    "title": "Create a memory project",
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "readOnlyHint": false,
+    },
+    "description": "DANGER: Permanently deletes the selected project and every note, pinned note, graph edge, and search record owned by it. This cannot be undone. First call project_list, verify the immutable projectID and current name, then provide both confirmation fields exactly.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "confirmProjectName": {
+          "description": "Must exactly match the project's current case-sensitive name. This prevents deletion after an unnoticed rename or wrong-ID selection.",
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string",
+        },
+        "confirmation": {
+          "const": "DELETE_PROJECT_AND_ALL_MEMORY",
+          "description": "Required destructive-action confirmation phrase.",
+          "type": "string",
+        },
+        "projectID": {
+          "description": "The immutable project UUID returned by project_create or project_list.",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+      },
+      "required": [
+        "projectID",
+        "confirmProjectName",
+        "confirmation",
+      ],
+      "type": "object",
+    },
+    "name": "project_delete",
+    "title": "Permanently delete a memory project",
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "readOnlyHint": true,
+    },
+    "description": "List all memory projects with their immutable IDs, current names, note counts, and pinned-note counts. Use this before selecting a project by ID.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object",
+    },
+    "name": "project_list",
+    "title": "List memory projects",
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "readOnlyHint": false,
+    },
+    "description": "Rename one project by its immutable projectID. Renaming does not change the ID or detach any notes.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "projectID": {
+          "description": "The immutable project UUID returned by project_create or project_list.",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+        "projectName": {
+          "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string",
+        },
+      },
+      "required": [
+        "projectID",
+        "projectName",
+      ],
+      "type": "object",
+    },
+    "name": "project_update",
+    "title": "Rename a memory project",
+  },
+]
+`;

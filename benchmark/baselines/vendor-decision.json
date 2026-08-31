@@ -1,0 +1,26 @@
+{
+  "schema": "opencode2-memory.vendor-decision/1",
+  "date": "2026-08-31",
+  "decision": "none",
+  "candidates": {
+    "agentmemory": {
+      "version": "0.9.29",
+      "status": "not-selected",
+      "reason": "Exact tagged source review found candidate project, upsert, delete, and health surfaces, but no completed isolated live A/B run proved every leakage, purge, rebuild, quality, and latency gate."
+    },
+    "mcp-memory-service": {
+      "version": "11.8.2",
+      "status": "disqualified",
+      "reason": "Exact tagged source review did not establish the required server-side opaque project filter and externally usable deterministic project purge contract."
+    }
+  },
+  "production": {
+    "semanticBackend": "none",
+    "retrieval": "sqlite-fts5-plus-one-hop-graph"
+  },
+  "claims": {
+    "liveBenchmarkCompleted": false,
+    "crossProjectLeakageMeasured": false,
+    "secretCanaryLeakageMeasured": false
+  }
+}

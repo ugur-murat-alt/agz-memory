@@ -1,9 +1,14 @@
 import { randomUUID } from "crypto";
 import { Database } from "bun:sqlite";
-import { copyFileSync, existsSync } from "fs";
+import { chmodSync, copyFileSync, existsSync } from "fs";
 import { hashRoot } from "./identity";
 import { normalizeProjectName } from "./project";
 import { PREDICATES, SCHEMA_VERSION } from "./types";
+import { createVerifiedBackup, restoreVerifiedBackup, type VerifiedBackup } from "./db/backup";
+import { assertHealthyDatabase } from "./db/health";
+import { acquireMigrationLock, type MigrationLock } from "./db/migration-lock";
+import { migrateV8ToV9 } from "./db/migrations/v009";
+import { createSchemaV9, FTS_V9, SCHEMA_V9_TABLES } from "./db/schema";
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS projects (
@@ -52,7 +57,12 @@ export interface OpenedDB {
 
 export function openMemoryDatabase(path: string): OpenedDB {
   const db = new Database(path, { create: true });
+  chmodSync(path, 0o600);
+  let lock: MigrationLock | undefined;
+  let backup: VerifiedBackup | undefined;
   try {
+    db.exec("PRAGMA busy_timeout=5000");
+    db.exec("PRAGMA journal_mode=WAL");
     const existingVersion = getSchemaVersion(db);
     if (existingVersion && existingVersion.version > SCHEMA_VERSION) {
       throw new Error(
@@ -60,30 +70,79 @@ export function openMemoryDatabase(path: string): OpenedDB {
       );
     }
 
-    db.exec("PRAGMA foreign_keys=OFF");
-    db.exec("PRAGMA journal_mode=WAL");
-    db.exec(DDL);
-    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(id UNINDEXED, title, summary, content, tokenize='unicode61')");
-    const version = existingVersion;
-    if (!version) {
-      if (hasLegacyV2(db)) {
+    const hasExistingData = hasLegacyV2(db) || hasTable(db, "notes") || Boolean(existingVersion);
+    if (!hasExistingData) {
+      db.exec("PRAGMA foreign_keys=ON");
+      db.transaction(() => createSchemaV9(db))();
+      assertHealthyDatabase(db);
+      return { db, close: () => db.close() };
+    }
+
+    if ((existingVersion?.version ?? 0) < SCHEMA_VERSION) {
+      lock = acquireMigrationLock(path, SCHEMA_VERSION);
+      backup = createVerifiedBackup(
+        db,
+        path,
+        existingVersion?.version ?? 2,
+        SCHEMA_VERSION,
+        "0.4.0-beta.1",
+      );
+      db.exec("PRAGMA foreign_keys=OFF");
+      if (!existingVersion && hasLegacyV2(db)) {
+        db.exec(DDL);
+        db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(id UNINDEXED, title, summary, content, tokenize='unicode61')");
         migrateFromV2(db, path);
-      } else {
+      } else if (!existingVersion) {
+        db.exec(DDL);
+        db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(id UNINDEXED, title, summary, content, tokenize='unicode61')");
         db.transaction(() => {
           adoptLegacyProjectIDs(db);
-          db.query("INSERT INTO schema_state (version) VALUES (?)").run(SCHEMA_VERSION);
+          db.query("DELETE FROM schema_state").run();
+          db.query("INSERT INTO schema_state (version) VALUES (8)").run();
         })();
+      } else if (existingVersion.version < 8) {
+        db.exec(DDL);
+        db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(id UNINDEXED, title, summary, content, tokenize='unicode61')");
+        migrateToV8(db);
       }
-    } else if (version.version < SCHEMA_VERSION) {
-      migrateToCurrentSchema(db);
-      console.warn(`[opencode2-memory] migrated to v${SCHEMA_VERSION} (project-scoped memory)`);
+
+      const version = getSchemaVersion(db)?.version ?? 8;
+      if (version < 9) db.transaction(() => migrateV8ToV9(db))();
+      db.exec("PRAGMA foreign_keys=ON");
+      if ((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1) {
+        throw new Error("failed to enable database foreign keys");
+      }
+      assertHealthyDatabase(db);
+      console.warn(
+        `[opencode2-memory] migrated to v${SCHEMA_VERSION} (backup: ${backup.manifestPath})`,
+      );
+      lock.release();
+      lock = undefined;
+      return { db, close: () => db.close() };
     }
-    db.exec(DDL);
+
+    db.exec("PRAGMA foreign_keys=ON");
+    db.exec(SCHEMA_V9_TABLES);
+    db.exec(FTS_V9);
+    assertHealthyDatabase(db);
     db.exec("PRAGMA foreign_keys=ON");
     return { db, close: () => db.close() };
   } catch (error) {
     db.close();
+    if (backup) {
+      try {
+        restoreVerifiedBackup(
+          backup.manifestPath,
+          path,
+          "RESTORE_DATABASE_FROM_VERIFIED_BACKUP",
+        );
+      } catch (restoreError) {
+        throw new AggregateError([error, restoreError], "migration and automatic restore failed");
+      }
+    }
     throw error;
+  } finally {
+    lock?.release();
   }
 }
 
@@ -94,7 +153,7 @@ function getSchemaVersion(db: Database): { version: number } | undefined {
     | undefined;
 }
 
-function migrateToCurrentSchema(db: Database): void {
+function migrateToV8(db: Database): void {
   db.transaction(() => {
     adoptLegacyProjectIDs(db);
     const pinned = hasColumn(db, "notes", "pinned") ? "pinned" : "0";
@@ -140,12 +199,10 @@ function migrateToCurrentSchema(db: Database): void {
       DROP TABLE notes;
       ALTER TABLE notes_v7 RENAME TO notes;
       ALTER TABLE note_edges_v7 RENAME TO note_edges;
-      DELETE FROM notes_fts;
-      INSERT INTO notes_fts (id, title, summary, content)
-      SELECT id, title, summary, content FROM notes;
     `);
     importLegacyAssociations(db);
-    db.query("INSERT OR REPLACE INTO schema_state (version) VALUES (?)").run(SCHEMA_VERSION);
+    db.query("DELETE FROM schema_state").run();
+    db.query("INSERT INTO schema_state (version) VALUES (8)").run();
   })();
 }
 
@@ -243,7 +300,8 @@ function migrateFromV2(db: Database, path: string) {
       edges: hasTable(db, "memory_edges"),
     });
     adoptLegacyProjectIDs(db);
-    db.query("INSERT INTO schema_state (version) VALUES (?)").run(SCHEMA_VERSION);
+    db.query("DELETE FROM schema_state").run();
+    db.query("INSERT INTO schema_state (version) VALUES (8)").run();
   })();
 }
 

@@ -227,7 +227,7 @@ describe("project-scoped memory MCP server", () => {
     newer.exec("CREATE TABLE schema_state (version INTEGER PRIMARY KEY); INSERT INTO schema_state VALUES (99)");
     newer.close();
     expect(() => openMemoryDatabase(databasePath)).toThrow(
-      "database schema v99 is newer than supported v8",
+      "database schema v99 is newer than supported v9",
     );
     const unchanged = new Database(databasePath, { readonly: true });
     const notes = unchanged
@@ -469,7 +469,15 @@ describe("project-scoped memory MCP server", () => {
     ).toBe(123);
     expect(store.deleteProject(alphaID, "Alpha").ok).toBe(true);
     expect((opened.db.query("SELECT COUNT(*) AS count FROM notes WHERE project_id = ?").get(alphaID) as { count: number }).count).toBe(0);
-    expect((opened.db.query("SELECT COUNT(*) AS count FROM notes_fts WHERE id = ?").get(alphaNote) as { count: number }).count).toBe(0);
+    expect(
+      (
+        opened.db
+          .query(
+            "SELECT COUNT(*) AS count FROM notes_fts WHERE rowid = (SELECT rowid FROM notes WHERE id = ?)",
+          )
+          .get(alphaNote) as { count: number }
+      ).count,
+    ).toBe(0);
     expect(opened.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
     opened.close();
     rmSync(directory, { recursive: true, force: true });

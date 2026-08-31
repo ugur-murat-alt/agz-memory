@@ -2,6 +2,8 @@ import { randomUUID } from "crypto";
 import type { Database } from "bun:sqlite";
 import { cleanProjectName, normalizeProjectName, validateProjectName } from "./project";
 import { INLINE_LIMIT, KINDS, PREDICATES } from "./types";
+import { noteContentHash } from "./db/migrations/v009";
+import { deriveDocument } from "./retrieval/derived";
 import type {
   Edge,
   Kind,
@@ -37,7 +39,10 @@ export interface UpdateResult {
 }
 
 export class MemoryStore {
-  constructor(private db: Database) {}
+  constructor(
+    private db: Database,
+    private indexBackends: readonly string[] = [],
+  ) {}
 
   resolveProject(selector: ProjectSelector): { ok: boolean; project?: Project; reason?: string } {
     const row = selector.projectID
@@ -139,11 +144,9 @@ export class MemoryStore {
       .get(projectID, projectID, projectID) as { notes: number; edges: number; pinned: number };
 
     this.db.transaction(() => {
-      this.db
-        .query("DELETE FROM notes_fts WHERE id IN (SELECT id FROM notes WHERE project_id = ?)")
-        .run(projectID);
-      this.db.query("DELETE FROM note_edges WHERE project_id = ?").run(projectID);
-      this.db.query("DELETE FROM notes WHERE project_id = ?").run(projectID);
+      for (const backend of this.indexBackends) {
+        this.enqueueOutbox(backend, "purge-project", projectID, null, null, null);
+      }
       this.db.query("DELETE FROM projects WHERE id = ?").run(projectID);
     })();
     return {
@@ -164,10 +167,16 @@ export class MemoryStore {
       const existing = this.getNoteRow(projectID, id);
       if (!existing) return { ok: false, reason: `note ${id} not found in project ${project.name}` };
       this.db.transaction(() => {
-        this.db
-          .query("DELETE FROM note_edges WHERE project_id = ? AND (source_id = ? OR target_id = ?)")
-          .run(projectID, id, id);
-        this.db.query("DELETE FROM notes_fts WHERE id = ?").run(id);
+        for (const backend of this.indexBackends) {
+          this.enqueueOutbox(
+            backend,
+            "delete-note",
+            projectID,
+            id,
+            existing.current_revision,
+            existing.content_hash,
+          );
+        }
         this.db.query("DELETE FROM notes WHERE project_id = ? AND id = ?").run(projectID, id);
       })();
       return { ok: true, id, projectID, projectName: project.name, deleted: true };
@@ -194,20 +203,50 @@ export class MemoryStore {
 
     const now = Date.now();
     const sizeClass = content.length <= INLINE_LIMIT ? "inline" : "indexed";
+    const contentHash = noteContentHash(kind, title, summary, content);
     if (existing) {
+      if (
+        existing.kind === kind &&
+        existing.title === title &&
+        existing.summary === summary &&
+        existing.content === content &&
+        existing.size_class === sizeClass
+      ) {
+        return { ok: true, id: existing.id, projectID, projectName: project.name, sizeClass };
+      }
       this.db.transaction(() => {
         this.db.query(
-          "UPDATE notes SET kind = ?, title = ?, summary = ?, content = ?, size_class = ?, updated_at = ? WHERE project_id = ? AND id = ?",
-        ).run(kind, title, summary, content, sizeClass, now, projectID, existing.id);
-        this.db.query("DELETE FROM notes_fts WHERE id = ?").run(existing.id);
-        this.db
-          .query("INSERT INTO notes_fts (id, title, summary, content) VALUES (?, ?, ?, ?)")
-          .run(existing.id, title, summary, content);
+          `UPDATE notes
+              SET kind = ?, title = ?, summary = ?, content = ?, size_class = ?,
+                  current_revision = current_revision + 1, content_hash = ?, updated_at = ?
+            WHERE project_id = ? AND id = ?`,
+        ).run(kind, title, summary, content, sizeClass, contentHash, now, projectID, existing.id);
+        this.recordCurrentRevision(projectID, existing.id, "mcp-manual", now);
+        const revision = existing.current_revision + 1;
+        const derivedHash = deriveDocument({
+          projectID,
+          noteID: existing.id,
+          revision,
+          kind,
+          title,
+          summary,
+          content,
+        })?.contentHash ?? null;
+        for (const backend of this.indexBackends) {
+          this.enqueueOutbox(
+            backend,
+            "upsert-note",
+            projectID,
+            existing.id,
+            revision,
+            derivedHash,
+          );
+        }
       })();
       return { ok: true, id: existing.id, projectID, projectName: project.name, sizeClass };
     }
     const id = randomUUID();
-    this.insertNote(id, projectID, kind, title, summary, content, sizeClass, null, now);
+    this.insertNote(id, projectID, kind, title, summary, content, sizeClass, null, null, now);
     return { ok: true, id, projectID, projectName: project.name, sizeClass };
   }
 
@@ -220,9 +259,36 @@ export class MemoryStore {
     if (note.pinned === (pinned ? 1 : 0)) {
       return { ok: true, id, projectID, projectName: project.name, pinned };
     }
-    this.db
-      .query("UPDATE notes SET pinned = ?, updated_at = ? WHERE project_id = ? AND id = ?")
-      .run(pinned ? 1 : 0, Date.now(), projectID, id);
+    const now = Date.now();
+    this.db.transaction(() => {
+      this.db
+        .query(
+          `UPDATE notes
+              SET pinned = ?, current_revision = current_revision + 1, updated_at = ?
+            WHERE project_id = ? AND id = ?`,
+        )
+        .run(pinned ? 1 : 0, now, projectID, id);
+      this.recordCurrentRevision(projectID, id, "mcp-manual", now);
+      const derivedHash = deriveDocument({
+        projectID,
+        noteID: id,
+        revision: note.current_revision + 1,
+        kind: note.kind,
+        title: note.title,
+        summary: note.summary,
+        content: note.content,
+      })?.contentHash ?? null;
+      for (const backend of this.indexBackends) {
+        this.enqueueOutbox(
+          backend,
+          "upsert-note",
+          projectID,
+          id,
+          note.current_revision + 1,
+          derivedHash,
+        );
+      }
+    })();
     return { ok: true, id, projectID, projectName: project.name, pinned };
   }
 
@@ -235,18 +301,45 @@ export class MemoryStore {
     content: string,
     sizeClass: string,
     supersedesID: string | null,
+    subjectKey: string | null,
     now: number,
   ) {
+    const contentHash = noteContentHash(kind, title, summary, content);
     this.db.transaction(() => {
       this.db
         .query(
-          `INSERT INTO notes (id, project_id, kind, title, summary, content, size_class, pinned, status, supersedes_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?)`,
+          `INSERT INTO notes
+             (id, project_id, kind, title, summary, content, size_class, pinned, status,
+              supersedes_id, current_revision, subject_key, content_hash, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, 1, ?, ?, ?, ?)`,
         )
-        .run(id, projectID, kind, title, summary, content, sizeClass, supersedesID, now, now);
-      this.db
-        .query("INSERT INTO notes_fts (id, title, summary, content) VALUES (?, ?, ?, ?)")
-        .run(id, title, summary, content);
+        .run(
+          id,
+          projectID,
+          kind,
+          title,
+          summary,
+          content,
+          sizeClass,
+          supersedesID,
+          subjectKey,
+          contentHash,
+          now,
+          now,
+        );
+      this.recordCurrentRevision(projectID, id, "mcp-manual", now);
+      const derivedHash = deriveDocument({
+        projectID,
+        noteID: id,
+        revision: 1,
+        kind,
+        title,
+        summary,
+        content,
+      })?.contentHash ?? null;
+      for (const backend of this.indexBackends) {
+        this.enqueueOutbox(backend, "upsert-note", projectID, id, 1, derivedHash);
+      }
     })();
   }
 
@@ -299,7 +392,7 @@ export class MemoryStore {
       .query(
         `SELECT n.*, p.name AS project_name, bm25(notes_fts) AS rank
            FROM notes_fts
-           JOIN notes n ON n.id = notes_fts.id
+           JOIN notes n ON n.rowid = notes_fts.rowid
            JOIN projects p ON p.id = n.project_id
           WHERE notes_fts MATCH ? AND n.project_id = ? AND n.status = 'active'
           ORDER BY n.pinned DESC, rank
@@ -360,6 +453,90 @@ export class MemoryStore {
       )
       .get(projectID, id) as NoteRow | undefined;
   }
+
+  private recordCurrentRevision(
+    projectID: string,
+    noteID: string,
+    sourceType: "mcp-manual" | "opencode-capture" | "admin",
+    now: number,
+    capture?: {
+      eventID?: string;
+      sessionID?: string;
+      messageID?: string;
+      ordinal?: number;
+      toolCallID?: string;
+      redactionVersion?: string;
+      extractorVersion?: string;
+      confidence?: number;
+    },
+  ): string {
+    const note = this.db
+      .query("SELECT * FROM notes WHERE project_id = ? AND id = ?")
+      .get(projectID, noteID) as NoteRow | undefined;
+    if (!note) throw new Error(`note ${noteID} not found while recording revision`);
+    const provenanceID = randomUUID();
+    this.db.query(`
+      INSERT INTO note_provenance
+        (id, project_id, note_id, source_type, capture_event_id, source_session_id,
+         source_message_id, source_ordinal, source_tool_call_id, redaction_version,
+         extractor_version, confidence, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      provenanceID,
+      projectID,
+      noteID,
+      sourceType,
+      capture?.eventID ?? null,
+      capture?.sessionID ?? null,
+      capture?.messageID ?? null,
+      capture?.ordinal ?? null,
+      capture?.toolCallID ?? null,
+      capture?.redactionVersion ?? null,
+      capture?.extractorVersion ?? null,
+      capture?.confidence ?? null,
+      now,
+    );
+    this.db.query(`
+      INSERT INTO note_revisions
+        (project_id, note_id, revision, kind, title, summary, content, size_class,
+         pinned, status, supersedes_id, subject_key, content_hash, provenance_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      projectID,
+      noteID,
+      note.current_revision,
+      note.kind,
+      note.title,
+      note.summary,
+      note.content,
+      note.size_class,
+      note.pinned,
+      note.status,
+      note.supersedes_id,
+      note.subject_key,
+      note.content_hash,
+      provenanceID,
+      now,
+    );
+    return provenanceID;
+  }
+
+  private enqueueOutbox(
+    backend: string,
+    operation: "upsert-note" | "delete-note" | "purge-project",
+    projectID: string,
+    noteID: string | null,
+    revision: number | null,
+    contentHash: string | null,
+  ): void {
+    const now = Date.now();
+    this.db.query(`
+      INSERT OR IGNORE INTO index_outbox
+        (backend, operation, project_id, note_id, revision, content_hash, state,
+         attempt_count, available_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
+    `).run(backend, operation, projectID, noteID, revision, contentHash, now, now);
+  }
 }
 
 interface ProjectRow {
@@ -382,6 +559,9 @@ interface NoteRow {
   pinned: number;
   status: "active" | "superseded" | "archived";
   supersedes_id: string | null;
+  current_revision: number;
+  subject_key: string | null;
+  content_hash: string;
   created_at: number;
   updated_at: number;
 }

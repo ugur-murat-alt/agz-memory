@@ -4,7 +4,7 @@ import type { MemoryStore } from "./store";
 import { registerTools } from "./tools";
 
 export const SERVER_NAME = "opencode2-memory";
-export const SERVER_VERSION = "0.3.0";
+export const SERVER_VERSION = "0.4.0-beta.1";
 
 export function createMemoryServer(store: MemoryStore): McpServer {
   const server = new McpServer(

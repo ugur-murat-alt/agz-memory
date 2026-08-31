@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "opencode2-memory redacted retrieval corpus record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["projectID", "query", "goldNoteIDs", "abstain", "questionType"],
+  "properties": {
+    "projectID": { "type": "string", "format": "uuid" },
+    "query": { "type": "string", "maxLength": 1200 },
+    "goldNoteIDs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 240 },
+      "uniqueItems": true
+    },
+    "abstain": { "type": "boolean" },
+    "questionType": {
+      "enum": ["knowledge-update", "temporal", "multi-session", "preference", "abstention"]
+    },
+    "temporalCutoff": { "type": "integer", "minimum": 0 }
+  }
+}
