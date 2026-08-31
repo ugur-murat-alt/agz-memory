@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.backup/
+*.migration.lock/
+benchmark/fixtures/private/
+.opencode/.skill-power/
+*.tgz
+coverage/
+*.tmp
