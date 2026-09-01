@@ -3,8 +3,12 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { CAPTURE_SCHEMA } from "../../src/capture/contract";
+import { resolveConfig } from "../../src/config";
 import { openMemoryDatabase } from "../../src/db";
+import { BACKUP_FORMAT } from "../../src/db/backup";
 import { MEMORY_GUIDANCE } from "../../src/context";
+import { formatUntrustedContext } from "../../src/retrieval/formatter";
 import { createMemoryServer } from "../../src/server";
 import { MemoryStore } from "../../src/store";
 
@@ -15,6 +19,32 @@ afterEach(async () => {
 });
 
 describe("MCP compatibility surface", () => {
+  test("preserves persisted and configuration compatibility identifiers", () => {
+    expect(CAPTURE_SCHEMA).toBe("opencode2-memory.capture/1");
+    expect(BACKUP_FORMAT).toBe("opencode2-memory-backup/1");
+    expect(
+      formatUntrustedContext("project-id", [
+        {
+          id: "note-id",
+          projectID: "project-id",
+          projectName: "Contract",
+          kind: "fact",
+          title: "title",
+          summary: "summary",
+          sizeClass: "inline",
+          pinned: false,
+          via: "match",
+        },
+      ])?.startsWith('<opencode2-memory-context trust="untrusted" project-id="project-id">'),
+    ).toBe(true);
+    expect(resolveConfig({ HOME: "/tmp/agz-memory-contract-home" }).databasePath).toBe(
+      "/tmp/agz-memory-contract-home/.local/share/opencode-memory/memory.sqlite",
+    );
+    expect(
+      resolveConfig({ OPENCODE_MEMORY_DATABASE_PATH: "/custom/memory.sqlite" }).databasePath,
+    ).toBe("/custom/memory.sqlite");
+  });
+
   test("keeps initialize identity, instructions, and exact tool catalog stable", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-contract-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));

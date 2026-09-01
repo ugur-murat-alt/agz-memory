@@ -13,10 +13,10 @@
 ```sh
 export OPENCODE_MEMORY_DATABASE_PATH="$HOME/.local/share/opencode-memory/memory.sqlite"
 
-agz-memory-admin doctor
-agz-memory-admin backup
-agz-memory-admin upgrade --to 9
-agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin upgrade --to 9
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin doctor
 ```
 
 Do not start a writer if the final doctor report has `ok: false`. Preserve the
@@ -27,14 +27,14 @@ manifest path and SHA-256 printed by `backup`.
 The first invocation is a dry run:
 
 ```sh
-agz-memory-admin restore \
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin restore \
   "$OPENCODE_MEMORY_DATABASE_PATH.backup/<backup>.manifest.json"
 ```
 
 Verify `targetPath`, `sourceSchema`, row counts, and `sha256`. Then run:
 
 ```sh
-agz-memory-admin restore \
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin restore \
   "$OPENCODE_MEMORY_DATABASE_PATH.backup/<backup>.manifest.json" \
   --sha256 <manifest-database-sha256> \
   --confirm RESTORE_DATABASE_FROM_VERIFIED_BACKUP
@@ -48,7 +48,7 @@ read-only MCP `project_list`/`memory_recall` smoke before enabling writers.
 Inspect `<database>.migration.lock/owner.json`. Never break a live owner.
 
 ```sh
-agz-memory-admin unlock \
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin unlock \
   --owner <exact-owner-id> \
   --confirm BREAK_STALE_MIGRATION_LOCK
 ```
@@ -63,8 +63,8 @@ another migration process may still be starting.
 Pruning is dry-run by default and returns a digest:
 
 ```sh
-agz-memory-admin backup prune
-agz-memory-admin backup prune \
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin backup prune
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin backup prune \
   --digest <dry-run-digest> \
   --confirm DELETE_VERIFIED_BACKUPS
 ```

@@ -187,11 +187,11 @@ kullanır.
 Yönetim binary'si JSON çıktısını stdout'a, temizlenmiş hataları stderr'e yazar:
 
 ```sh
-agz-memory-admin doctor
-agz-memory-admin backup
-agz-memory-admin upgrade --to 9
-agz-memory-admin outbox status
-agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin upgrade --to 9
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin outbox status
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin capture status
 ```
 
 Her schema yükseltmesi atomik bir migration lock alır ve DDL çalışmadan önce
@@ -202,9 +202,11 @@ edilir.
 Manifest hash'i ve onay sağlanmadıkça geri yükleme yalnız kuru çalışır:
 
 ```sh
-agz-memory-admin restore /path/to/memory.sqlite.backup/<manifest>.manifest.json
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin restore \
+  /path/to/memory.sqlite.backup/<manifest>.manifest.json
 
-agz-memory-admin restore /path/to/memory.sqlite.backup/<manifest>.manifest.json \
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin restore \
+  /path/to/memory.sqlite.backup/<manifest>.manifest.json \
   --sha256 <manifest-database-sha256> \
   --confirm RESTORE_DATABASE_FROM_VERIFIED_BACKUP
 ```

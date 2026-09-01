@@ -17,8 +17,10 @@ import {
 import { basename, dirname, join, resolve } from "path";
 import { assertHealthyDatabase, inspectDatabase } from "./health";
 
+export const BACKUP_FORMAT = "opencode2-memory-backup/1" as const;
+
 export interface BackupManifest {
-  format: "opencode2-memory-backup/1";
+  format: typeof BACKUP_FORMAT;
   productVersion: string;
   sourceSchema: number;
   targetSchema: number;
@@ -82,7 +84,7 @@ export function createVerifiedBackup(
     }
     const bytes = readFileSync(temporaryDatabasePath);
     const manifest: BackupManifest = {
-      format: "opencode2-memory-backup/1",
+      format: BACKUP_FORMAT,
       productVersion,
       sourceSchema,
       targetSchema,
@@ -118,7 +120,7 @@ export function verifyBackupManifest(manifestPath: string): VerifiedBackup {
     throw new Error("backup manifest must be a regular file");
   }
   const manifest = JSON.parse(readFileSync(resolvedManifestPath, "utf8")) as BackupManifest;
-  if (manifest.format !== "opencode2-memory-backup/1") {
+  if (manifest.format !== BACKUP_FORMAT) {
     throw new Error("unsupported backup manifest format");
   }
   if (

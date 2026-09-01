@@ -187,11 +187,11 @@ manual synchronization.
 The admin binary writes JSON to stdout and sanitized errors to stderr:
 
 ```sh
-agz-memory-admin doctor
-agz-memory-admin backup
-agz-memory-admin upgrade --to 9
-agz-memory-admin outbox status
-agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin upgrade --to 9
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin outbox status
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin capture status
 ```
 
 Every schema upgrade takes an atomic migration lock and creates a verified
@@ -201,9 +201,11 @@ foreign keys, table counts, revision invariants, and FTS counts are checked.
 Restore is dry-run unless the manifest hash and confirmation are supplied:
 
 ```sh
-agz-memory-admin restore /path/to/memory.sqlite.backup/<manifest>.manifest.json
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin restore \
+  /path/to/memory.sqlite.backup/<manifest>.manifest.json
 
-agz-memory-admin restore /path/to/memory.sqlite.backup/<manifest>.manifest.json \
+bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin restore \
+  /path/to/memory.sqlite.backup/<manifest>.manifest.json \
   --sha256 <manifest-database-sha256> \
   --confirm RESTORE_DATABASE_FROM_VERIFIED_BACKUP
 ```
