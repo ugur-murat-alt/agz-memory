@@ -17,8 +17,19 @@ describe("backup, restore, and migration lock", () => {
     const store = new MemoryStore(opened.db);
     const projectID = store.createProject("Restore").project!.projectID;
     store.update(projectID, { kind: "fact", title: "before", summary: "before" });
-    const backup = createVerifiedBackup(opened.db, path, 9, 9, "test");
+    const backup = createVerifiedBackup(opened.db, path, 10, 10, "test");
     expect(verifyBackupManifest(backup.manifestPath).manifest.sha256).toBe(backup.manifest.sha256);
+    expect(() => createVerifiedBackup(opened.db, path, 9, 10, "test")).toThrow(
+      "backup source schema v9 does not match database schema v10",
+    );
+    const mismatchedManifest = `${backup.manifestPath}.mismatched.json`;
+    writeFileSync(
+      mismatchedManifest,
+      `${JSON.stringify({ ...backup.manifest, sourceSchema: 9 }, null, 2)}\n`,
+    );
+    expect(() => verifyBackupManifest(mismatchedManifest)).toThrow(
+      "backup manifest source schema does not match database",
+    );
     store.update(projectID, { kind: "fact", title: "after", summary: "after" });
     opened.close();
 
@@ -45,7 +56,7 @@ describe("backup, restore, and migration lock", () => {
     const store = new MemoryStore(opened.db);
     const projectID = store.createProject("Busy Restore").project!.projectID;
     store.update(projectID, { kind: "fact", title: "before", summary: "before" });
-    const backup = createVerifiedBackup(opened.db, path, 9, 9, "test");
+    const backup = createVerifiedBackup(opened.db, path, 10, 10, "test");
     opened.close();
 
     const reader = new Database(path);
@@ -81,7 +92,7 @@ describe("backup, restore, and migration lock", () => {
     const store = new MemoryStore(opened.db);
     const projectID = store.createProject("Corrupt Restore").project!.projectID;
     store.update(projectID, { kind: "fact", title: "recoverable", summary: "recoverable" });
-    const backup = createVerifiedBackup(opened.db, path, 9, 9, "test");
+    const backup = createVerifiedBackup(opened.db, path, 10, 10, "test");
     opened.close();
     writeFileSync(path, "corrupt-source");
 
@@ -102,7 +113,7 @@ describe("backup, restore, and migration lock", () => {
     const path = join(directory, "memory.sqlite");
     const opened = openMemoryDatabase(path);
     new MemoryStore(opened.db).createProject("Prune");
-    const backup = createVerifiedBackup(opened.db, path, 9, 9, "test");
+    const backup = createVerifiedBackup(opened.db, path, 10, 10, "test");
     opened.close();
     const original = JSON.parse(readFileSync(backup.manifestPath, "utf8")) as Record<string, unknown>;
     writeFileSync(

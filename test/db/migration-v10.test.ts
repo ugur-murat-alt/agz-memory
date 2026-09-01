@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "crypto";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 import { CAPTURE_SCHEMA, parseCaptureEvent } from "../../src/capture/contract";
 import { openMemoryDatabase } from "../../src/db";
+import { acquireMigrationLock } from "../../src/db/migration-lock";
 import { createSchema } from "../../src/db/schema";
 
 describe("schema v10 migration", () => {
@@ -35,7 +36,115 @@ describe("schema v10 migration", () => {
     opened.close();
     rmSync(directory, { recursive: true, force: true });
   });
+
+  test("creates one correctly labeled backup across concurrent openers", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-v9-v10-concurrent-"));
+    const path = join(directory, "memory.sqlite");
+    createV9Database(path);
+    const modulePath = resolve(import.meta.dir, "../../src/db.ts");
+    const script = `
+      import { openMemoryDatabase } from ${JSON.stringify(modulePath)};
+      const opened = openMemoryDatabase(${JSON.stringify(path)});
+      opened.close();
+    `;
+    const gate = acquireMigrationLock(path, 10);
+    const children = Array.from({ length: 6 }, () =>
+      Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" }),
+    );
+    let waiterCount = 0;
+    try {
+      waiterCount = await waitForMigrationWaiters(directory, children.length);
+    } finally {
+      gate.release();
+    }
+    const results = await Promise.all(
+      children.map(async (child) => ({
+        exitCode: await child.exited,
+        stderr: await new Response(child.stderr).text(),
+      })),
+    );
+    expect(waiterCount).toBe(children.length);
+    const failures = results.filter((result) => result.exitCode !== 0);
+    expect(failures).toEqual([]);
+
+    const backupDirectory = `${path}.backup`;
+    const manifests = readdirSync(backupDirectory).filter((name) => name.endsWith(".manifest.json"));
+    const databases = readdirSync(backupDirectory).filter((name) => name.endsWith(".sqlite"));
+    expect(manifests).toHaveLength(1);
+    expect(databases).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(backupDirectory, manifests[0]!), "utf8"))).toMatchObject({
+      sourceSchema: 9,
+      targetSchema: 10,
+    });
+    const backup = new Database(join(backupDirectory, databases[0]!), { readonly: true });
+    expect(backup.query("SELECT version FROM schema_state").get()).toEqual({ version: 9 });
+    backup.close();
+
+    const migrated = new Database(path, { readonly: true });
+    expect(migrated.query("SELECT version FROM schema_state").get()).toEqual({ version: 10 });
+    migrated.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  test("reopens the canonical database after a waiting connection is replaced", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-v9-v10-replaced-"));
+    const path = join(directory, "memory.sqlite");
+    const replacementPath = join(directory, "replacement.sqlite");
+    createV9Database(path);
+    createV9Database(replacementPath);
+    const modulePath = resolve(import.meta.dir, "../../src/db.ts");
+    const script = `
+      import { openMemoryDatabase } from ${JSON.stringify(modulePath)};
+      const opened = openMemoryDatabase(${JSON.stringify(path)});
+      opened.close();
+    `;
+    const gate = acquireMigrationLock(path, 10);
+    const child = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
+    let waiterCount = 0;
+    try {
+      waiterCount = await waitForMigrationWaiters(directory, 1);
+      moveDatabase(path, `${path}.displaced`);
+      moveDatabase(replacementPath, path);
+    } finally {
+      gate.release();
+    }
+    const result = {
+      exitCode: await child.exited,
+      stderr: await new Response(child.stderr).text(),
+    };
+    expect(waiterCount).toBe(1);
+    expect(result.exitCode === 0 ? [] : [result]).toEqual([]);
+
+    const canonical = new Database(path, { readonly: true });
+    expect(canonical.query("SELECT version FROM schema_state").get()).toEqual({ version: 10 });
+    canonical.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
 });
+
+function migrationWaiterCount(directory: string): number {
+  return readdirSync(directory).filter(
+    (name) => name.startsWith("memory.sqlite.migration.lock.owner-") && name.endsWith(".tmp"),
+  ).length;
+}
+
+async function waitForMigrationWaiters(directory: string, expected: number): Promise<number> {
+  const deadline = Date.now() + 20_000;
+  let count = 0;
+  while (Date.now() < deadline) {
+    count = migrationWaiterCount(directory);
+    if (count === expected) break;
+    await Bun.sleep(10);
+  }
+  return count;
+}
+
+function moveDatabase(source: string, target: string): void {
+  renameSync(source, target);
+  for (const suffix of ["-wal", "-shm"]) {
+    if (existsSync(`${source}${suffix}`)) renameSync(`${source}${suffix}`, `${target}${suffix}`);
+  }
+}
 
 function createV9Database(path: string): void {
   const retiredSchema = ["opencode", "2", "-memory.capture/1"].join("");
@@ -67,6 +176,7 @@ function createV9Database(path: string): void {
     redaction: { policyVersion: "redaction/1", replacements: 0, truncated: false },
   });
   const db = new Database(path, { create: true });
+  db.exec("PRAGMA journal_mode=WAL");
   createSchema(db);
   db.exec("PRAGMA foreign_keys=OFF");
   db.exec(`
@@ -118,5 +228,6 @@ function createV9Database(path: string): void {
     payload,
     createHash("sha256").update(payload, "utf8").digest("hex"),
   );
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   db.close();
 }

@@ -30,7 +30,7 @@ jobs:
           cd "$RUNNER_TEMP/agz-install"
           npm init -y
           npm install --ignore-scripts \
-            "$RUNNER_TEMP/agz-pack/vaur94-agz-memory-0.4.0.tgz" \
-            "$RUNNER_TEMP/agz-pack/vaur94-agz-memory-plugin-0.4.0.tgz"
+            "$RUNNER_TEMP/agz-pack/vaur94-agz-memory-0.4.1.tgz" \
+            "$RUNNER_TEMP/agz-pack/vaur94-agz-memory-plugin-0.4.1.tgz"
           npm audit --audit-level=moderate
           bun -e 'await import("@vaur94/agz-memory/core"); await import("@vaur94/agz-memory-plugin")'

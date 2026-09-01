@@ -1,6 +1,6 @@
 {
   "name": "@vaur94/agz-memory",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Project-scoped persistent linked memory MCP server for OpenCode V2",
   "type": "module",
   "main": "./dist/server.js",

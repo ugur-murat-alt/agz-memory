@@ -3,6 +3,24 @@
 All notable changes to AGZ Memory are recorded here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-09-01
+
+### Fixed
+
+- Re-read the SQLite schema after acquiring the migration lock so concurrent
+  MCP processes do not act on a stale pre-lock version.
+- Skip backup and migration work when another process already completed the
+  target schema, preventing redundant backups whose manifest version could
+  differ from the copied database.
+- Retry migration-lock handoff when the previous owner releases the lock
+  between a competing process's create attempt and ownership check.
+- Reopen the canonical SQLite file after taking the migration lock so a waiter
+  cannot continue on a database file replaced during automatic recovery.
+- Verify versioned backup manifests against the schema stored in their SQLite
+  database instead of trusting the caller-provided source label.
+- Added a six-process regression test that requires exactly one v9 backup, a
+  v9 backup database, and one healthy v10 canonical database.
+
 ## [0.4.0] - 2026-09-01
 
 ### Added
@@ -56,5 +74,6 @@ All notable changes to AGZ Memory are recorded here. The project follows
 - Preserved the nine-tool MCP interface and project-isolation guarantees while
   establishing the AGZ Memory public packages and repository.
 
+[0.4.1]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.4.0
 [0.4.0-beta.1]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.4.0-beta.1

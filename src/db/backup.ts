@@ -48,6 +48,11 @@ export function createVerifiedBackup(
   productVersion: string,
 ): VerifiedBackup {
   const sourceHealth = assertHealthyDatabase(db);
+  if (sourceHealth.schemaVersion !== undefined && sourceHealth.schemaVersion !== sourceSchema) {
+    throw new Error(
+      `backup source schema v${sourceSchema} does not match database schema v${sourceHealth.schemaVersion}`,
+    );
+  }
   const checkpoint = db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
     busy: number;
     log: number;
@@ -81,6 +86,9 @@ export function createVerifiedBackup(
     }
     if (JSON.stringify(backupHealth.counts) !== JSON.stringify(sourceHealth.counts)) {
       throw new Error("backup row counts differ from source database");
+    }
+    if (backupHealth.schemaVersion !== undefined && backupHealth.schemaVersion !== sourceSchema) {
+      throw new Error("backup schema does not match source schema");
     }
     const bytes = readFileSync(temporaryDatabasePath);
     const manifest: BackupManifest = {
@@ -156,6 +164,9 @@ export function verifyBackupManifest(manifestPath: string): VerifiedBackup {
     const health = assertHealthyDatabase(db);
     if (JSON.stringify(health.counts) !== JSON.stringify(manifest.counts)) {
       throw new Error("backup manifest row counts do not match");
+    }
+    if (health.schemaVersion !== undefined && health.schemaVersion !== manifest.sourceSchema) {
+      throw new Error("backup manifest source schema does not match database");
     }
   } finally {
     db.close();

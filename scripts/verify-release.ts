@@ -85,7 +85,7 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
   if (version && dependency !== version) {
     errors.push(`plugin dependency on ${CORE_PACKAGE} must equal ${version}`);
   }
-  if (version && version !== "0.4.0") errors.push(`final package version must be 0.4.0, found ${version}`);
+  if (version && version !== "0.4.1") errors.push(`final package version must be 0.4.1, found ${version}`);
 
   if (version) {
     requireText(files, "src/version.ts", `PRODUCT_VERSION = "${version}"`, errors);

@@ -58,13 +58,11 @@ export interface OpenedDB {
 }
 
 export function openMemoryDatabase(path: string): OpenedDB {
-  const db = new Database(path, { create: true });
-  chmodSync(path, 0o600);
+  let db = openDatabase(path);
+  let dbOpen = true;
   let lock: MigrationLock | undefined;
   let backup: VerifiedBackup | undefined;
   try {
-    db.exec("PRAGMA busy_timeout=5000");
-    db.exec("PRAGMA journal_mode=WAL");
     const existingVersion = getSchemaVersion(db);
     if (existingVersion && existingVersion.version > SCHEMA_VERSION) {
       throw new Error(
@@ -81,20 +79,39 @@ export function openMemoryDatabase(path: string): OpenedDB {
     }
 
     if ((existingVersion?.version ?? 0) < SCHEMA_VERSION) {
+      db.close();
+      dbOpen = false;
       lock = acquireMigrationLock(path, SCHEMA_VERSION);
+      db = openDatabase(path);
+      dbOpen = true;
+      const migrationVersion = getSchemaVersion(db);
+      if (migrationVersion && migrationVersion.version > SCHEMA_VERSION) {
+        throw new Error(
+          `database schema v${migrationVersion.version} is newer than supported v${SCHEMA_VERSION}`,
+        );
+      }
+      if ((migrationVersion?.version ?? 0) === SCHEMA_VERSION) {
+        lock.release();
+        lock = undefined;
+        db.exec("PRAGMA foreign_keys=ON");
+        db.exec(SCHEMA_TABLES);
+        db.exec(FTS_V9);
+        assertHealthyDatabase(db);
+        return { db, close: () => db.close() };
+      }
       backup = createVerifiedBackup(
         db,
         path,
-        existingVersion?.version ?? 2,
+        migrationVersion?.version ?? 2,
         SCHEMA_VERSION,
         PRODUCT_VERSION,
       );
       db.exec("PRAGMA foreign_keys=OFF");
-      if (!existingVersion && hasLegacyV2(db)) {
+      if (!migrationVersion && hasLegacyV2(db)) {
         db.exec(DDL);
         db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(id UNINDEXED, title, summary, content, tokenize='unicode61')");
         migrateFromV2(db, path);
-      } else if (!existingVersion) {
+      } else if (!migrationVersion) {
         db.exec(DDL);
         db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(id UNINDEXED, title, summary, content, tokenize='unicode61')");
         db.transaction(() => {
@@ -102,7 +119,7 @@ export function openMemoryDatabase(path: string): OpenedDB {
           db.query("DELETE FROM schema_state").run();
           db.query("INSERT INTO schema_state (version) VALUES (8)").run();
         })();
-      } else if (existingVersion.version < 8) {
+      } else if (migrationVersion.version < 8) {
         db.exec(DDL);
         db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(id UNINDEXED, title, summary, content, tokenize='unicode61')");
         migrateToV8(db);
@@ -134,7 +151,7 @@ export function openMemoryDatabase(path: string): OpenedDB {
     db.exec("PRAGMA foreign_keys=ON");
     return { db, close: () => db.close() };
   } catch (error) {
-    db.close();
+    if (dbOpen) db.close();
     if (backup) {
       try {
         restoreVerifiedBackup(
@@ -149,6 +166,19 @@ export function openMemoryDatabase(path: string): OpenedDB {
     throw error;
   } finally {
     lock?.release();
+  }
+}
+
+function openDatabase(path: string): Database {
+  const db = new Database(path, { create: true });
+  try {
+    chmodSync(path, 0o600);
+    db.exec("PRAGMA busy_timeout=5000");
+    db.exec("PRAGMA journal_mode=WAL");
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
   }
 }
 

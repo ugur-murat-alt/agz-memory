@@ -2,7 +2,7 @@
 
 English | [Türkçe](README.tr.md)
 
-Optional OpenCode V2 adapter for `@vaur94/agz-memory@0.4.0`. It adds explicit
+Optional OpenCode V2 adapter for `@vaur94/agz-memory@0.4.1`. It adds explicit
 project binding, redacted capture, bounded retrieval, and staged context
 injection to OpenCode `0.0.0-beta-18743`.
 
@@ -15,7 +15,7 @@ retrieval deadline.
 {
   "plugins": [
     {
-      "package": "@vaur94/agz-memory-plugin@0.4.0",
+      "package": "@vaur94/agz-memory-plugin@0.4.1",
       "options": {
         "mode": "off",
         "autoCreateProjects": false,

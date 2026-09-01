@@ -51,7 +51,7 @@ export function acquireMigrationLock(
           rmSync(path, { recursive: true, force: true });
           throw error;
         }
-        if (!existsSync(path)) throw error;
+        if (!isAlreadyExistsError(error)) throw error;
         if (Date.now() >= deadline) {
           const current = readMigrationLockOwner(path);
           throw new Error(
@@ -129,4 +129,13 @@ function processIsAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      String((error as { code: unknown }).code) === "EEXIST",
+  );
 }
