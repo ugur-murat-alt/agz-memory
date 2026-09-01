@@ -15,6 +15,7 @@ import type { ActiveBinding } from "./binding";
 import { eventMatchesLocation, sessionMatchesBinding } from "./binding";
 import type { MemoryPluginOptions } from "./config";
 import { safeAssistantCandidate, safeUserCandidate } from "./extract";
+import { PLUGIN_VERSION } from "./version";
 
 type OpenCodeEvent = ReturnType<Plugin.Context["event"]["subscribe"]> extends AsyncIterable<infer Event>
   ? Event
@@ -24,10 +25,13 @@ export class PluginRuntime {
   private abort = new AbortController();
   private registrations: Array<{ dispose(): Promise<void> }> = [];
   private promptCache = new Map<string, { text: string; expiresAt: number }>();
+  private optedOutSessions = new Set<string>();
+  private observedSessions = new Set<string>();
   private reconcileQueue = new Set<string>();
   private reconcileAgain = new Set<string>();
   private reconcileTasks = new Set<Promise<void>>();
   private eventLoop?: Promise<void>;
+  private retentionTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     private ctx: Plugin.Context,
@@ -38,14 +42,30 @@ export class PluginRuntime {
 
   async start(): Promise<void> {
     try {
+      this.core.capture.runRetentionBacklog();
+      this.retentionTimer = setInterval(() => {
+        try {
+          this.core.capture.runRetentionBacklog();
+        } catch (error) {
+          this.log("retention", error);
+        }
+      }, 60 * 60_000);
+      this.retentionTimer.unref();
       this.registrations.push(
         await this.ctx.session.hook("prompt", async (input) => {
           if (this.abort.signal.aborted) return;
           try {
             const sessionID = String(input.sessionID);
             if (!(await sessionMatchesBinding(this.ctx, sessionID, this.binding))) return;
+            this.observedSessions.add(sessionID);
+            if (/\[memory:off\]/i.test(input.prompt.text)) {
+              this.promptCache.delete(sessionID);
+              this.optedOutSessions.add(sessionID);
+              return;
+            }
+            this.optedOutSessions.delete(sessionID);
             this.cachePrompt(sessionID, input.prompt.text);
-            if (!this.captureEnabled || /\[memory:off\]/i.test(input.prompt.text)) return;
+            if (!this.captureEnabled) return;
             this.core.capture.checkpoint(
               sessionID,
               this.binding.bindingKey,
@@ -71,8 +91,16 @@ export class PluginRuntime {
           if (this.abort.signal.aborted || !this.retrievalEnabled) return;
           const originalLength = input.system.length;
           try {
-            if (!(await sessionMatchesBinding(this.ctx, String(input.sessionID), this.binding))) return;
-            const query = this.takePrompt(String(input.sessionID)) ?? latestUserText(input.messages);
+            const sessionID = String(input.sessionID);
+            if (!(await sessionMatchesBinding(this.ctx, sessionID, this.binding))) return;
+            if (!this.observedSessions.has(sessionID)) {
+              this.observedSessions.add(sessionID);
+              if (/\[memory:off\]/i.test(latestUserText(input.messages) ?? "")) {
+                this.optedOutSessions.add(sessionID);
+              }
+            }
+            if (this.optedOutSessions.has(sessionID)) return;
+            const query = this.takePrompt(sessionID) ?? latestUserText(input.messages);
             if (!query) return;
             const deadlineAt = Date.now() + this.options.retrieval.timeoutMs;
             const result = await this.core.retrieval.retrieve({
@@ -83,7 +111,7 @@ export class PluginRuntime {
               semantic: "off",
             });
             if (this.options.mode === "shadow-retrieval") return;
-            if (input.system.some((part) => part.text.includes("<opencode2-memory-context"))) return;
+            if (input.system.some((part) => part.text.includes("<agz-memory-context"))) return;
             const context = formatUntrustedContext(this.binding.projectID, result.cards, {
               maxCards: this.options.retrieval.maxCards,
               maxCharacters: this.options.retrieval.maxCharacters,
@@ -99,7 +127,9 @@ export class PluginRuntime {
         await this.ctx.tool.hook("execute.after", async (input) => {
           if (this.abort.signal.aborted || !this.captureEnabled) return;
           try {
-            if (!(await sessionMatchesBinding(this.ctx, String(input.sessionID), this.binding))) return;
+            const sessionID = String(input.sessionID);
+            if (!(await sessionMatchesBinding(this.ctx, sessionID, this.binding))) return;
+            if (await this.turnOptedOut(sessionID)) return;
             const signal = projectToolSignal(
               input.tool,
               input.status,
@@ -122,7 +152,7 @@ export class PluginRuntime {
               source: {
                 system: "opencode-v2",
                 opencodeVersion: SUPPORTED_OPENCODE_VERSION,
-                pluginVersion: "0.4.0-beta.1",
+                pluginVersion: PLUGIN_VERSION,
                 sessionID: String(input.sessionID),
                 messageID: String(input.messageID),
                 toolCallID: String(input.id),
@@ -140,6 +170,8 @@ export class PluginRuntime {
       this.eventLoop = this.runEventLoop();
     } catch (error) {
       this.abort.abort();
+      if (this.retentionTimer) clearInterval(this.retentionTimer);
+      this.retentionTimer = undefined;
       await Promise.allSettled(this.registrations.splice(0).map((registration) => registration.dispose()));
       this.promptCache.clear();
       throw error;
@@ -148,8 +180,12 @@ export class PluginRuntime {
 
   async stop(): Promise<void> {
     this.abort.abort();
+    if (this.retentionTimer) clearInterval(this.retentionTimer);
+    this.retentionTimer = undefined;
     await Promise.allSettled(this.registrations.splice(0).map((registration) => registration.dispose()));
     this.promptCache.clear();
+    this.optedOutSessions.clear();
+    this.observedSessions.clear();
     if (this.eventLoop) await this.eventLoop;
     await Promise.allSettled([...this.reconcileTasks]);
   }
@@ -180,6 +216,16 @@ export class PluginRuntime {
     if (locationMatch === undefined && !(await sessionMatchesBinding(this.ctx, event.data.sessionID, this.binding))) {
       return;
     }
+    if (event.type === "session.deleted") {
+      this.promptCache.delete(event.data.sessionID);
+      this.optedOutSessions.delete(event.data.sessionID);
+      this.observedSessions.delete(event.data.sessionID);
+      try {
+        this.core.capture.markReconciled(event.data.sessionID, "closed");
+      } catch {}
+      return;
+    }
+    if (await this.turnOptedOut(event.data.sessionID)) return;
     if (event.type === "session.text.ended" && this.captureEnabled) {
       const safe = safeAssistantCandidate([{ type: "text", text: event.data.text }]);
       if (safe.candidate) {
@@ -200,13 +246,6 @@ export class PluginRuntime {
           key,
         );
       }
-      return;
-    }
-    if (event.type === "session.deleted") {
-      this.promptCache.delete(event.data.sessionID);
-      try {
-        this.core.capture.markReconciled(event.data.sessionID, "closed");
-      } catch {}
       return;
     }
     if (
@@ -255,11 +294,13 @@ export class PluginRuntime {
       if (!(await sessionMatchesBinding(this.ctx, sessionID, this.binding))) return;
       const messages = await this.ctx.session.context({ sessionID });
       let lastMessageID: string | undefined;
+      let skipAssistantTurn = false;
       for (const message of messages) {
         if (!("id" in message)) continue;
         lastMessageID = String(message.id);
         if (message.type === "user") {
-          if (/\[memory:off\]/i.test(message.text)) continue;
+          skipAssistantTurn = /\[memory:off\]/i.test(message.text);
+          if (skipAssistantTurn) continue;
           const safe = safeUserCandidate(message.text);
           if (safe.candidate) {
             this.ingestCandidate(
@@ -272,6 +313,7 @@ export class PluginRuntime {
           }
         }
         if (message.type === "assistant") {
+          if (skipAssistantTurn) continue;
           for (let ordinal = 0; ordinal < message.content.length; ordinal++) {
             const part = message.content[ordinal]!;
             if (part.type !== "text") continue;
@@ -331,7 +373,7 @@ export class PluginRuntime {
       source: {
         system: "opencode-v2",
         opencodeVersion: SUPPORTED_OPENCODE_VERSION,
-        pluginVersion: "0.4.0-beta.1",
+        pluginVersion: PLUGIN_VERSION,
         sessionID,
         messageID,
         ...(ordinal === undefined ? {} : { ordinal }),
@@ -377,6 +419,16 @@ export class PluginRuntime {
     return ["shadow-retrieval", "inject", "auto-write"].includes(this.options.mode);
   }
 
+  private async turnOptedOut(sessionID: string): Promise<boolean> {
+    if (this.optedOutSessions.has(sessionID)) return true;
+    if (this.observedSessions.has(sessionID)) return false;
+    const messages = await this.ctx.session.context({ sessionID });
+    this.observedSessions.add(sessionID);
+    const optedOut = /\[memory:off\]/i.test(latestUserText(messages) ?? "");
+    if (optedOut) this.optedOutSessions.add(sessionID);
+    return optedOut;
+  }
+
   private get captureMode(): "shadow" | "auto-write" {
     return this.options.mode === "auto-write" ? "auto-write" : "shadow";
   }
@@ -405,7 +457,14 @@ function isSessionEvent(
 function latestUserText(messages: readonly unknown[]): string | undefined {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    if (!message || typeof message !== "object" || (message as { role?: unknown }).role !== "user") continue;
+    if (!message || typeof message !== "object") continue;
+    if (
+      (message as { type?: unknown }).type === "user" &&
+      typeof (message as { text?: unknown }).text === "string"
+    ) {
+      return (message as { text: string }).text;
+    }
+    if ((message as { role?: unknown }).role !== "user") continue;
     const content = (message as { content?: unknown }).content;
     if (typeof content === "string") return content;
     if (!Array.isArray(content)) continue;

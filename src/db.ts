@@ -8,7 +8,9 @@ import { createVerifiedBackup, restoreVerifiedBackup, type VerifiedBackup } from
 import { assertHealthyDatabase } from "./db/health";
 import { acquireMigrationLock, type MigrationLock } from "./db/migration-lock";
 import { migrateV8ToV9 } from "./db/migrations/v009";
-import { createSchemaV9, FTS_V9, SCHEMA_V9_TABLES } from "./db/schema";
+import { migrateV9ToV10 } from "./db/migrations/v010";
+import { createSchema, FTS_V9, SCHEMA_TABLES } from "./db/schema";
+import { PRODUCT_VERSION } from "./version";
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS projects (
@@ -73,7 +75,7 @@ export function openMemoryDatabase(path: string): OpenedDB {
     const hasExistingData = hasLegacyV2(db) || hasTable(db, "notes") || Boolean(existingVersion);
     if (!hasExistingData) {
       db.exec("PRAGMA foreign_keys=ON");
-      db.transaction(() => createSchemaV9(db))();
+      db.transaction(() => createSchema(db))();
       assertHealthyDatabase(db);
       return { db, close: () => db.close() };
     }
@@ -85,7 +87,7 @@ export function openMemoryDatabase(path: string): OpenedDB {
         path,
         existingVersion?.version ?? 2,
         SCHEMA_VERSION,
-        "0.4.0-beta.1",
+        PRODUCT_VERSION,
       );
       db.exec("PRAGMA foreign_keys=OFF");
       if (!existingVersion && hasLegacyV2(db)) {
@@ -106,8 +108,12 @@ export function openMemoryDatabase(path: string): OpenedDB {
         migrateToV8(db);
       }
 
-      const version = getSchemaVersion(db)?.version ?? 8;
-      if (version < 9) db.transaction(() => migrateV8ToV9(db))();
+      let version = getSchemaVersion(db)?.version ?? 8;
+      if (version < 9) {
+        db.transaction(() => migrateV8ToV9(db))();
+        version = 9;
+      }
+      if (version < 10) db.transaction(() => migrateV9ToV10(db))();
       db.exec("PRAGMA foreign_keys=ON");
       if ((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1) {
         throw new Error("failed to enable database foreign keys");
@@ -122,7 +128,7 @@ export function openMemoryDatabase(path: string): OpenedDB {
     }
 
     db.exec("PRAGMA foreign_keys=ON");
-    db.exec(SCHEMA_V9_TABLES);
+    db.exec(SCHEMA_TABLES);
     db.exec(FTS_V9);
     assertHealthyDatabase(db);
     db.exec("PRAGMA foreign_keys=ON");

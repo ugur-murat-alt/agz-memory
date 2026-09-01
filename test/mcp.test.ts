@@ -227,7 +227,7 @@ describe("project-scoped memory MCP server", () => {
     newer.exec("CREATE TABLE schema_state (version INTEGER PRIMARY KEY); INSERT INTO schema_state VALUES (99)");
     newer.close();
     expect(() => openMemoryDatabase(databasePath)).toThrow(
-      "database schema v99 is newer than supported v9",
+      "database schema v99 is newer than supported v10",
     );
     const unchanged = new Database(databasePath, { readonly: true });
     const notes = unchanged

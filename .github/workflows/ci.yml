@@ -1,5 +1,8 @@
 name: ci
 
+permissions:
+  contents: read
+
 on:
   push:
   pull_request:
@@ -13,7 +16,21 @@ jobs:
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
+      - run: bun run release:verify
       - run: bun test
       - run: bun run check
       - run: bun run build
-      - run: npm pack --dry-run --json
+      - run: mkdir -p "$RUNNER_TEMP/agz-pack"
+      - run: npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/agz-pack"
+      - run: npm pack --json --pack-destination "$RUNNER_TEMP/agz-pack"
+        working-directory: packages/opencode-plugin
+      - name: Install packed packages together
+        run: |
+          mkdir -p "$RUNNER_TEMP/agz-install"
+          cd "$RUNNER_TEMP/agz-install"
+          npm init -y
+          npm install --ignore-scripts \
+            "$RUNNER_TEMP/agz-pack/vaur94-agz-memory-0.4.0.tgz" \
+            "$RUNNER_TEMP/agz-pack/vaur94-agz-memory-plugin-0.4.0.tgz"
+          npm audit --audit-level=moderate
+          bun -e 'await import("@vaur94/agz-memory/core"); await import("@vaur94/agz-memory-plugin")'

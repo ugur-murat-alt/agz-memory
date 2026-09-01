@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
+import { CAPTURE_SCHEMA } from "../capture/contract";
 
-export const SCHEMA_V9_TABLES = `
+export const SCHEMA_TABLES = `
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -70,28 +71,7 @@ CREATE TABLE IF NOT EXISTS capture_checkpoints (
 );
 CREATE INDEX IF NOT EXISTS capture_checkpoints_due_idx
   ON capture_checkpoints(state, next_reconcile_at);
-CREATE TABLE IF NOT EXISTS capture_events (
-  idempotency_key TEXT PRIMARY KEY,
-  contract TEXT NOT NULL CHECK (contract = 'opencode2-memory.capture/1'),
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  binding_key TEXT NOT NULL REFERENCES project_bindings(binding_key) ON DELETE CASCADE,
-  event_kind TEXT NOT NULL CHECK (event_kind IN ('user-candidate','assistant-candidate','session-summary','tool-signal')),
-  source_session_id TEXT NOT NULL,
-  source_message_id TEXT,
-  source_ordinal INTEGER CHECK (source_ordinal IS NULL OR source_ordinal >= 0),
-  source_tool_call_id TEXT,
-  payload_json TEXT CHECK (payload_json IS NULL OR json_valid(payload_json)),
-  payload_hash TEXT,
-  redaction_version TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('pending','shadowed','review','materialized','duplicate','ignored','rejected','quarantined','failed','dead')),
-  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-  note_id TEXT,
-  last_error_code TEXT,
-  generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0),
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  processed_at INTEGER
-);
+${captureEventsTable()}
 CREATE INDEX IF NOT EXISTS capture_events_state_idx ON capture_events(state, updated_at);
 CREATE INDEX IF NOT EXISTS capture_events_session_idx ON capture_events(project_id, source_session_id);
 CREATE INDEX IF NOT EXISTS capture_events_note_idx ON capture_events(project_id, note_id);
@@ -177,13 +157,40 @@ CREATE TRIGGER IF NOT EXISTS notes_fts_au AFTER UPDATE OF title, summary, conten
 END;
 `;
 
-export function createSchemaV9(db: Database): void {
-  db.exec(SCHEMA_V9_TABLES);
+export function createSchema(db: Database): void {
+  db.exec(SCHEMA_TABLES);
   db.exec(FTS_V9);
   db.query("DELETE FROM schema_state").run();
-  db.query("INSERT INTO schema_state(version) VALUES (9)").run();
+  db.query("INSERT INTO schema_state(version) VALUES (10)").run();
 }
 
 export function rebuildFts(db: Database): void {
   db.query("INSERT INTO notes_fts(notes_fts) VALUES ('rebuild')").run();
+}
+
+export function captureEventsTable(
+  table: "capture_events" | "capture_events_v10" = "capture_events",
+): string {
+  return `CREATE TABLE IF NOT EXISTS ${table} (
+  idempotency_key TEXT PRIMARY KEY,
+  contract TEXT NOT NULL CHECK (contract = '${CAPTURE_SCHEMA}'),
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  binding_key TEXT NOT NULL REFERENCES project_bindings(binding_key) ON DELETE CASCADE,
+  event_kind TEXT NOT NULL CHECK (event_kind IN ('user-candidate','assistant-candidate','session-summary','tool-signal')),
+  source_session_id TEXT NOT NULL,
+  source_message_id TEXT,
+  source_ordinal INTEGER CHECK (source_ordinal IS NULL OR source_ordinal >= 0),
+  source_tool_call_id TEXT,
+  payload_json TEXT CHECK (payload_json IS NULL OR json_valid(payload_json)),
+  payload_hash TEXT,
+  redaction_version TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending','shadowed','review','materialized','duplicate','ignored','rejected','quarantined','failed','dead')),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  note_id TEXT,
+  last_error_code TEXT,
+  generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  processed_at INTEGER
+);`;
 }

@@ -1,173 +1,171 @@
-# AGZ Memory v9 Architecture
+# AGZ Memory Architecture
+
+This document describes the `0.4.0` runtime and SQLite schema v10.
 
 ## System Boundaries
 
 ```text
-OpenCode V2 beta-18743
-  -> @vaur94/agz-memory-plugin
-     -> projection -> redaction -> policy -> CaptureEventV1
-     -> bounded retrieval -> untrusted context
-         -> @vaur94/agz-memory/core
-           -> SQLite schema v9 (canonical)
-              -> FTS5 + graph + revisions + provenance + outbox
-                 -> optional replaceable derived backend (currently none)
-
 OpenCode MCP client
   -> agz-memory stdio server
-     -> unchanged nine-tool MCP adapter
-        -> same core and canonical SQLite database
+     -> nine-tool MCP adapter
+        -> memory core
+           -> SQLite schema v10 (canonical)
+
+OpenCode V2 beta-18743
+  -> @vaur94/agz-memory-plugin
+     -> explicit project binding
+     -> redacted capture and policy
+     -> bounded retrieval and untrusted context
+        -> the same memory core and SQLite database
+
+SQLite outbox
+  -> optional derived retrieval backend
+     -> disabled in 0.4.0; backend = none
 ```
 
-The MCP adapter owns tool schemas and text result envelopes. The core owns
-transactions, project isolation, capture, lifecycle, retrieval, and outbox.
-The plugin owns only exact OpenCode V2 hook/event adaptation. It writes no SQL.
+The MCP adapter owns tool schemas, annotations, and result envelopes. The core
+owns transactions, project isolation, note lifecycle, capture, retrieval,
+backup, migration, and outbox behavior. The plugin owns only OpenCode hook and
+event adaptation. It issues no SQL directly.
 
-## Canonical Storage
+## Trust And Ownership
 
-`projects`, `notes`, and `note_edges` preserve the public v8 identities and
-fields. Schema v9 adds internal note fields:
+`projects.id` is the ownership boundary. Every note, edge, revision,
+provenance record, binding, checkpoint, and capture event carries or resolves
+to that immutable UUID. Names are unique labels and may change.
 
-| Field | Invariant |
+Public selectors accept exactly one of `projectID` or `projectName`. The store
+resolves the selector before any read or mutation. Edge creation verifies that
+both endpoints belong to the selected project. Project deletion relies on
+foreign-key cascades only after the caller supplies the immutable ID, exact
+current name, and fixed confirmation phrase.
+
+## Canonical Schema
+
+SQLite schema v10 contains:
+
+| Table | Responsibility |
 |---|---|
-| `current_revision` | Integer `>= 1` |
-| `subject_key` | Optional normalized supersession key |
-| `content_hash` | SHA-256 of canonical kind/title/summary/content |
+| `projects` | Immutable project identity and unique normalized name. |
+| `notes` | Current note state, status, subject key, revision, and content hash. |
+| `note_edges` | Typed same-project graph relations. |
+| `notes_fts` | Trigger-maintained FTS5 projection of current note text. |
+| `project_bindings` | Explicit OpenCode-to-memory mapping with canonical path hash. |
+| `capture_checkpoints` | Bounded reconciliation progress without transcript text. |
+| `capture_events` | Redacted, idempotent capture audit under `agz-memory.capture/1`. |
+| `note_provenance` | Source identity, extractor/redaction versions, and confidence. |
+| `note_revisions` | Immutable snapshot for each committed note revision. |
+| `index_outbox` | Payload-free queue for replaceable derived indexes. |
+| `schema_state` | The single current schema version. |
 
-Additional tables:
+The v10 migration changes product-owned persisted identities. Existing v9
+capture rows are copied with the final capture contract; all other data remains
+in place. Migration runs with foreign keys temporarily disabled inside one
+transaction, reenables them, then requires integrity and foreign-key checks to
+pass.
 
-| Table | Purpose |
-|---|---|
-| `project_bindings` | Explicit OpenCode project/workspace to memory project mapping; stores only path hashes |
-| `capture_checkpoints` | Crash-safe session reconciliation progress without transcript text |
-| `capture_events` | Bounded redacted idempotent event audit |
-| `note_provenance` | Source IDs, extractor/redaction versions, and confidence; no prompt/tool payload |
-| `note_revisions` | Full snapshot for every committed note state |
-| `index_outbox` | Payload-free at-least-once derived-index queue |
+## Note Lifecycle
 
-`schema_state` is the only schema version source and contains exactly `9` after
-migration. Foreign keys are enabled during normal operation.
+Manual MCP writes and automatic writes use the same invariants:
 
-## Transaction Invariants
+1. Normalize and validate the project selector and input.
+2. Calculate the canonical content SHA-256.
+3. Commit the note mutation and its provenance/revision in one transaction.
+4. Maintain supersession status and the `SUPERSEDES` edge when applicable.
+5. Enqueue identity-only derived-index operations for configured backends.
+6. Let SQLite triggers update FTS5 for insert, update, and delete.
 
-- Create commits note, provenance, revision, FTS trigger, and outbox together.
-- Patch and pin increment revision only when values actually change.
-- Hard note delete cascades revision, provenance, edge, and FTS state.
-- Project delete queues payload-free backend purge operations before project
-  cascades, in the same transaction.
-- Supersession marks the old note `superseded`, snapshots it, creates the active
-  replacement, adds a `SUPERSEDES` edge, and writes outbox operations atomically.
-- Capture materialization commits the event disposition and note lifecycle in
-  one transaction.
+Only active notes are returned by normal recall. Superseded and archived state
+remains auditable through revisions and explicit reads where supported.
 
-The partial unique index on `(project_id, kind, subject_key)` applies only to
-active notes with a subject key. Manual MCP notes keep `subject_key = NULL`, so
-the existing free-form contract remains unchanged.
+## MCP Contract
 
-## FTS And Retrieval
+The external contract has exactly nine tools. Single and batch mutations share
+the same validation rules. A batch is ordered but deliberately non-atomic:
+each completed item commits before the next begins, and every item returns its
+own result.
 
-`notes_fts` is an external-content FTS5 table keyed by `notes.rowid`. Insert,
-update, and delete triggers maintain it inside note transactions. Migration
-uses FTS `rebuild` and compares note/FTS counts.
-
-Retrieval channels are bounded:
-
-| Channel | Candidate limit |
-|---|---:|
-| Lexical BM25 | 40 |
-| Optional semantic | 40 |
-| One-hop graph | 30 |
-
-Weighted reciprocal rank fusion uses `1.00`, `0.80`, and `0.35` channel weights
-with constant `60`. Every semantic hit is re-read by `(project_id, note_id)` and
-rejected when missing, inactive, cross-project, stale-revision, or hash-mismatched.
-Semantic failure falls back to lexical retrieval.
-
-The injection formatter emits only kind, opaque ID, title, and summary. It
-escapes delimiter characters, includes a fixed untrusted-data warning, limits
-output to eight cards and 4,800 characters, and never injects full note content.
+Tool descriptions mark read-only, idempotent, and destructive behavior for MCP
+clients. `memory_read` is the only operation that expands indexed cards to full
+content and graph neighbors. `memory_recall` returns bounded cards suitable for
+model context.
 
 ## Capture Pipeline
 
-The plugin uses the exact `@opencode-ai/plugin@0.0.0-beta-18743` Promise API:
+Capture requires all of these gates:
 
-- `ctx.session.hook("prompt")`
-- `ctx.session.hook("context")`
-- `ctx.tool.hook("execute.after")`
-- `ctx.event.subscribe({ signal })`
-- `ctx.session.get({ sessionID })`
-- `ctx.session.context({ sessionID })`
+1. The plugin version and running OpenCode beta match exactly.
+2. Mode is not `off`, capture is enabled, and exactly one explicit binding
+   matches project ID, workspace ID, and canonical directory.
+3. Only terminal user/assistant text or terminal tool status is projected.
+4. Credential and private-key patterns are removed or quarantined.
+5. The strict `CaptureEventV1` parser enforces size, source identity, event
+   kind, and redaction metadata.
+6. A deterministic SHA-256 idempotency key prevents replay duplicates.
+7. Shadow modes stop at the audit event. `auto-write` continues only for an
+   allowed kind, explicit durable evidence, supported intent, and confidence at
+   or above policy.
+8. Content is redacted again before note materialization.
 
-The live event stream is a latency hint, not the canonical ingestion boundary.
-Prompt checkpoints and bounded context reconciliation recover missed terminal
-events. Event reconnect uses bounded backoff. Plugin cleanup aborts the stream,
-disposes hooks, and waits only a bounded period.
+Quarantined events never retain a payload. Startup and hourly retention workers
+drain bounded batches: terminal event payloads become eligible for clearing
+after 30 days, quarantined events for deletion after 7 days, and expired idle,
+closed, or unavailable checkpoints for deletion. If every AGZ Memory process is
+stopped at the deadline, overdue work is drained on the next MCP or plugin start.
 
-The projection boundary accepts user prompt text and assistant terminal text.
-It excludes reasoning, tool arguments/results, attachments, files, shell output,
-system/synthetic/skill/compaction parts, paths, diffs, environment values, and
-provider state. Tool capture stores only name, terminal status, opaque native
-IDs, and a normalized error type.
+## Retrieval Pipeline
 
-Redaction runs before extraction and again inside core. High-risk payloads are
-quarantined with `payload_json = NULL`. Raw secret values and hashes are not
-stored in capture audit tables.
+Retrieval starts with project-filtered lexical FTS5 results. Same-project graph
+neighbors can be added with bounded fan-out. A reciprocal-rank fusion step
+deduplicates candidates and returns at most eight cards within the configured
+deadline.
 
-## Binding And Isolation
+The plugin formats cards inside an escaped
+`<agz-memory-context trust="untrusted">` envelope capped at 4,800 characters.
+The envelope states that records are reference data, not instructions or system
+policy. A timeout or retrieval failure produces no injection and leaves the
+original OpenCode context unchanged.
 
-Plugin bindings require memory project UUID, OpenCode project ID, optional
-workspace ID, and a verified canonical directory. Raw paths are not persisted.
-The binding key is:
+Semantic providers implement an optional backend contract: project-filtered
+query, idempotent upsert, deterministic delete, full project purge, and health.
+No provider is enabled in `0.4.0`. The SQLite lexical/graph path remains fully
+functional without one.
 
-```text
-sha256("opencode-v2\0" + projectID + "\0" + workspaceID + "\0" + sha256(realpath))
-```
+## Derived Index Outbox
 
-Basenames are never project identities. Event location or session location must
-match the active plugin instance. Missing, conflicting, moved, or cross-project
-bindings disable capture/injection for that callback.
+`index_outbox` stores backend, operation, project ID, note ID, revision, and
+content hash. It never stores note text. Workers lease rows, derive content
+from the canonical database at execution time, and acknowledge success only
+after the backend call completes.
 
-## Backup And Migration
+Leases are reclaimable after expiry. Retries use bounded exponential backoff;
+terminal failures become `dead` and are visible through the admin CLI. Project
+purge is a first-class operation so a derived backend cannot retain deleted
+project content by omission.
 
-Migration uses `<database>.migration.lock/owner.json`, mode `0700/0600`, with
-PID, process-start marker, host, timestamp, target schema, and random owner ID.
-A live owner cannot be broken by runtime or admin.
+## Backup, Migration, And Restore
 
-Before v8-to-v9 DDL:
+Database upgrades are serialized by a filesystem migration-lock directory with
+an owner record. Before the first schema mutation, AGZ Memory checkpoints WAL,
+creates a SQLite-consistent copy with `VACUUM INTO`, verifies integrity and row
+counts, hashes the bytes, and atomically publishes both database and
+`agz-memory-backup/1` manifest.
 
-1. Checkpoint WAL and validate source integrity/foreign keys.
-2. Create a unique `VACUUM INTO` snapshot.
-3. Validate the snapshot on a separate connection.
-4. Write SHA-256, byte size, schema, SQLite version, and row counts to a manifest.
-5. Fsync temporary files and the backup directory, then atomically rename.
-6. Rebuild notes/edges, create revision/provenance rows, create v9 tables and
-   trigger-based FTS, and set schema `9` as the final SQL step.
-7. Re-enable and verify foreign keys, integrity, counts, revisions, and FTS.
+A failed migration closes the active connection and attempts restore from that
+verified backup. Manual restore is two-step: dry-run inspection, then exact
+SHA-256 and `RESTORE_DATABASE_FROM_VERIFIED_BACKUP` confirmation. The replaced
+database is preserved under a unique failed-source name.
 
-Failure closes the candidate DB and restores the verified snapshot. Restore
-never overwrites the previous canonical DB; it preserves the old file and
-quarantines WAL/SHM sidecars.
+## Failure Policy
 
-## Outbox
+- Unsupported future schema: fail closed without mutation.
+- Missing or conflicting plugin binding: disable the plugin.
+- OpenCode version mismatch: disable the plugin; MCP remains available.
+- Capture parsing, redaction, or policy failure: reject or quarantine, never
+  broaden acceptance.
+- Retrieval timeout/backend error: omit injection and preserve original context.
+- Migration failure: restore verified source or raise an aggregate failure.
+- Dead outbox work: retain canonical SQLite data and report operational state.
 
-Outbox work is FIFO per `(backend, project_id)`. Atomic claims use random worker
-lease IDs and expiry. Stale revision upserts complete without export. Vendor
-exports apply redaction again and derive a hash from the redacted document.
-High-risk manual notes remain canonical but are not exported.
-
-Delivery is at least once and adapters must be idempotent by opaque project/note
-key. Ten failed attempts move work to `dead`; canonical note commits are never
-rolled back by a derived backend outage.
-
-## Fail-Open And Fail-Closed
-
-| Operation | Behavior |
-|---|---|
-| Plugin capture/injection | Fail-open; OpenCode request continues |
-| Semantic query | Lexical fallback |
-| Binding conflict | Fail-closed for memory feature |
-| Secret quarantine | Fail-closed for note write |
-| MCP mutation | Transaction rollback and explicit tool error |
-| Migration/restore | Fail-closed; service does not start on partial state |
-
-Logs contain allowlisted operation/outcome/error codes only. Prompt, query,
-note text, paths, tool payloads, headers, and credentials are never logged.
+These rules favor durable canonical data and explicit operator action over
+automatic recovery that could cross a project or trust boundary.

@@ -21,6 +21,7 @@ import { acquireMigrationLock, breakMigrationLock } from "../db/migration-lock";
 import { doctorDatabase } from "./doctor";
 import { SCHEMA_VERSION } from "../types";
 import { deriveDocument } from "../retrieval/derived";
+import { PRODUCT_VERSION } from "../version";
 
 export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
   const databasePath = resolveConfig().databasePath;
@@ -43,7 +44,7 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
     const db = new Database(databasePath);
     try {
       const version = schemaVersion(db);
-      return createVerifiedBackup(db, databasePath, version, version, "0.4.0-beta.1");
+      return createVerifiedBackup(db, databasePath, version, version, PRODUCT_VERSION);
     } finally {
       db.close();
       lock.release();

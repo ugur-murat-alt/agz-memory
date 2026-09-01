@@ -7,14 +7,14 @@ import { openMemoryDatabase } from "../../src/db";
 import { doctorDatabase } from "../../src/admin/doctor";
 import { noteContentHash } from "../../src/db/migrations/v009";
 
-describe("schema v9 migration", () => {
-  test("preserves v8 rows and creates revision, provenance, FTS triggers, and backup", () => {
-    const directory = mkdtempSync(join(tmpdir(), "agz-memory-v8-v9-"));
+describe("schema migration", () => {
+  test("preserves v8 rows and creates schema v10 revision, provenance, FTS, and backup", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-v8-v10-"));
     const path = join(directory, "memory.sqlite");
     createV8Database(path);
 
     const opened = openMemoryDatabase(path);
-    expect(opened.db.query("SELECT version FROM schema_state").all()).toEqual([{ version: 9 }]);
+    expect(opened.db.query("SELECT version FROM schema_state").all()).toEqual([{ version: 10 }]);
     expect(
       opened.db
         .query(

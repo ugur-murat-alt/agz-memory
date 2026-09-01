@@ -9,7 +9,13 @@ import { captureIdempotencyKey } from "../../src/capture/identity";
 import { extractExplicitUserCandidate } from "../../src/capture/policy";
 import { projectAssistantParts } from "../../src/capture/projection";
 import { redactText } from "../../src/capture/redact";
-import { parseCaptureEvent, type CaptureEventV1, type MemoryCandidateV1 } from "../../src/capture/contract";
+import {
+  CAPTURE_SCHEMA,
+  parseCaptureEvent,
+  type CaptureEventV1,
+  type MemoryCandidateV1,
+} from "../../src/capture/contract";
+import { PRODUCT_VERSION } from "../../src/version";
 
 describe("capture safety core", () => {
   test("uses stable native identity hashes and strict bounded events", () => {
@@ -48,7 +54,7 @@ describe("capture safety core", () => {
         checkpointMessageID: "checkpoint",
       }),
     ).toBe("d9cca69e3104563c3d0598a7dbb22945b2f51ba30cc5a44c6d5851d32d7b440c");
-    expect(() => parseCaptureEvent({ schema: "opencode2-memory.capture/1" })).toThrow();
+    expect(() => parseCaptureEvent({ schema: "retired.capture/1" })).toThrow();
   });
 
   test("projects only text parts and redacts credentials before persistence", () => {
@@ -144,6 +150,87 @@ describe("capture safety core", () => {
     opened.close();
     rmSync(directory, { recursive: true, force: true });
   });
+
+  test("drains terminal retention backlog while preserving fresh and pending records", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-retention-"));
+    const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
+    const memory = new MemoryStore(opened.db);
+    const projectID = memory.createProject("Retention").project!.projectID;
+    const capture = new CaptureStore(opened.db);
+    const binding = capture.bindProject({
+      memoryProjectID: projectID,
+      opencodeProjectID: "oc-project",
+      canonicalDirectory: "/canonical/project",
+    });
+    capture.checkpoint("closed-session", binding.bindingKey, projectID);
+    capture.markReconciled("closed-session", "closed");
+    capture.checkpoint("active-session", binding.bindingKey, projectID);
+
+    const candidate = extractExplicitUserCandidate("Kararım: saklama süresini uygula.")!;
+    const states = [
+      "materialized",
+      "duplicate",
+      "ignored",
+      "rejected",
+      "shadowed",
+      "review",
+      "failed",
+      "dead",
+    ] as const;
+    const now = Date.now();
+    for (let index = 0; index < 108; index++) {
+      const event = userEvent(projectID, binding.bindingKey, "session-1", `message-${index}`, candidate);
+      capture.ingest(event, "shadow");
+      opened.db
+        .query("UPDATE capture_events SET state = ?, processed_at = ?, updated_at = ? WHERE idempotency_key = ?")
+        .run(
+          states[index % states.length]!,
+          now - 31 * 24 * 60 * 60_000,
+          now - 31 * 24 * 60 * 60_000,
+          event.idempotencyKey,
+        );
+    }
+    const fresh = userEvent(projectID, binding.bindingKey, "session-1", "fresh", candidate);
+    capture.ingest(fresh, "shadow");
+    const pending = userEvent(projectID, binding.bindingKey, "session-1", "pending", candidate);
+    capture.ingest(pending, "shadow");
+    opened.db
+      .query("UPDATE capture_events SET state = 'pending', processed_at = NULL WHERE idempotency_key = ?")
+      .run(pending.idempotencyKey);
+
+    const oldRisky = userEvent(projectID, binding.bindingKey, "session-1", "old-quarantine", {
+      ...candidate,
+      content: "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
+    });
+    capture.ingest(oldRisky, "shadow");
+    opened.db
+      .query("UPDATE capture_events SET processed_at = ?, updated_at = ? WHERE idempotency_key = ?")
+      .run(now - 8 * 24 * 60 * 60_000, now - 8 * 24 * 60 * 60_000, oldRisky.idempotencyKey);
+    const youngRisky = userEvent(projectID, binding.bindingKey, "session-1", "young-quarantine", {
+      ...candidate,
+      content: "-----BEGIN PRIVATE KEY-----\nyoung\n-----END PRIVATE KEY-----",
+    });
+    capture.ingest(youngRisky, "shadow");
+    opened.db
+      .query("UPDATE capture_checkpoints SET updated_at = ? WHERE session_id = 'closed-session'")
+      .run(now - 31 * 24 * 60 * 60_000);
+
+    expect(capture.runRetentionBacklog(now)).toEqual({ summarized: 108, deleted: 1, checkpoints: 1 });
+    expect(
+      (opened.db.query("SELECT COUNT(*) AS count FROM capture_events WHERE payload_json IS NOT NULL").get() as {
+        count: number;
+      }).count,
+    ).toBe(2);
+    expect(
+      (opened.db.query("SELECT state FROM capture_events WHERE idempotency_key = ?").get(youngRisky.idempotencyKey) as {
+        state: string;
+      }).state,
+    ).toBe("quarantined");
+    expect(capture.getCheckpoint("closed-session")).toBeUndefined();
+    expect(capture.getCheckpoint("active-session")?.state).toBe("active");
+    opened.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
 });
 
 function userEvent(
@@ -154,7 +241,7 @@ function userEvent(
   candidate: MemoryCandidateV1,
 ): CaptureEventV1 {
   return {
-    schema: "opencode2-memory.capture/1",
+    schema: CAPTURE_SCHEMA,
     idempotencyKey: captureIdempotencyKey({ kind: "user", bindingKey, sessionID, messageID }),
     projectID,
     bindingKey,
@@ -162,7 +249,7 @@ function userEvent(
     source: {
       system: "opencode-v2",
       opencodeVersion: "0.0.0-beta-18743",
-      pluginVersion: "0.4.0-beta.1",
+      pluginVersion: PRODUCT_VERSION,
       sessionID,
       messageID,
       observedAt: Date.now(),

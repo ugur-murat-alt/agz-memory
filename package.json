@@ -1,6 +1,6 @@
 {
   "name": "@vaur94/agz-memory",
-  "version": "0.4.0-beta.1",
+  "version": "0.4.0",
   "description": "Project-scoped persistent linked memory MCP server for OpenCode V2",
   "type": "module",
   "main": "./dist/server.js",
@@ -25,6 +25,7 @@
     "ARCHITECTURE.md",
     "CHANGELOG.md",
     "docs/backup-restore-runbook.md",
+    "docs/backup-restore-runbook.tr.md",
     "LICENSE"
   ],
   "scripts": {
@@ -33,7 +34,8 @@
     "check": "bunx tsc --noEmit && bun run types && bun run --cwd packages/opencode-plugin check",
     "test": "bun test",
     "benchmark": "bun benchmark/run.ts",
-    "prepack": "bun run check && bun run test && bun run build"
+    "release:verify": "bun scripts/verify-release.ts",
+    "prepack": "bun run release:verify && bun run check && bun run test && bun run build"
   },
   "engines": {
     "bun": ">=1.3.14"

@@ -13,7 +13,20 @@ import { PluginRuntime } from "./runtime";
 export default Plugin.define({
   id: "agz-memory",
   async setup(ctx) {
-    const options = parseOptions(ctx.options);
+    let options: ReturnType<typeof parseOptions>;
+    try {
+      options = parseOptions(ctx.options);
+    } catch {
+      process.stderr.write(
+        `${JSON.stringify({
+          component: "agz-memory-plugin",
+          operation: "setup",
+          outcome: "disabled",
+          error_code: "invalid_configuration",
+        })}\n`,
+      );
+      return;
+    }
     if (options.mode === "off" || options.bindings.length === 0) return;
     if (ctx.app.version !== SUPPORTED_OPENCODE_VERSION) {
       process.stderr.write(

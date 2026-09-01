@@ -2,39 +2,55 @@
 
 English | [Türkçe](README.tr.md)
 
-Project-scoped persistent memory for OpenCode V2. The repository publishes two
-lockstep packages:
+AGZ Memory gives OpenCode V2 a durable, project-scoped linked memory. It ships
+as two independently usable packages that advance at the same version:
 
-- `@vaur94/agz-memory`: the nine-tool stdio MCP server, reusable core, and
-  recovery-oriented admin CLI.
-- `@vaur94/agz-memory-plugin`: optional safe capture and bounded context
-  injection for an exact OpenCode V2 beta.
+- `@vaur94/agz-memory`: a nine-tool MCP server, TypeScript core, and recovery
+  CLI backed by SQLite.
+- `@vaur94/agz-memory-plugin`: an optional OpenCode V2 adapter for bounded
+  retrieval and deliberately staged automatic capture.
 
-SQLite schema v9 is the canonical source of truth. Optional semantic services
-are disposable derived indexes and are disabled unless their isolation,
-deletion, purge, and quality contracts pass the benchmark gates.
+The MCP server is ready for normal use. The plugin starts inert: no project is
+created, no session is captured, and no context is injected until an explicit
+binding and rollout mode are configured.
+
+## Why AGZ Memory
+
+- Every read and mutation is scoped by an immutable project UUID or unique
+  project name.
+- Notes can be pinned, linked, superseded, revised, searched, and inspected
+  without mixing projects.
+- SQLite schema v10 is the canonical source of truth; optional semantic indexes
+  are replaceable derivatives.
+- Destructive project deletion requires the immutable ID, exact current name,
+  and a fixed confirmation phrase.
+- Backup manifests include row counts, SQLite integrity results, size, and
+  SHA-256 before restore is allowed.
+- Automatic capture is redacted, bounded, idempotent, and disabled by default.
 
 ## Compatibility
 
-| Component | Version |
+| Component | Supported version |
 |---|---|
-| Core/MCP | `0.4.0-beta.1` |
-| Plugin | `0.4.0-beta.1` |
+| Core and MCP | `0.4.0` |
+| OpenCode plugin | `0.4.0` |
 | OpenCode V2 | `0.0.0-beta-18743` |
 | `@opencode-ai/plugin` | `0.0.0-beta-18743` |
 | Bun | `>=1.3.14` |
-| SQLite schema | `9` |
+| SQLite schema | `10` |
 
-The plugin disables itself when the running OpenCode version does not exactly
-match its supported beta. The MCP server remains independently usable.
+The MCP server is not tied to an OpenCode beta. The optional plugin disables
+itself unless the running OpenCode version exactly matches the supported beta.
 
-## MCP Server
+## Install The MCP Server
+
+Run the server directly:
 
 ```sh
-bunx @vaur94/agz-memory@0.4.0-beta.1
+bunx @vaur94/agz-memory@0.4.0
 ```
 
-OpenCode V2 configuration uses `mcp.servers`:
+Or register it in OpenCode V2 under `mcp.servers`:
 
 ```jsonc
 {
@@ -42,7 +58,7 @@ OpenCode V2 configuration uses `mcp.servers`:
     "servers": {
       "agz-memory": {
         "type": "local",
-        "command": ["bunx", "@vaur94/agz-memory@0.4.0-beta.1"],
+        "command": ["bunx", "@vaur94/agz-memory@0.4.0"],
         "environment": {
           "OPENCODE_MEMORY_DATABASE_PATH": "{env:OPENCODE_MEMORY_DATABASE_PATH}"
         },
@@ -53,50 +69,51 @@ OpenCode V2 configuration uses `mcp.servers`:
 }
 ```
 
-The default database path is
-`~/.local/share/opencode-memory/memory.sqlite`. Override it with
-`OPENCODE_MEMORY_DATABASE_PATH` before starting OpenCode.
+The default database is
+`~/.local/share/opencode-memory/memory.sqlite`. Set
+`OPENCODE_MEMORY_DATABASE_PATH` before OpenCode starts to use another path.
+The database file is created with user-only permissions.
 
-### Tools
+## Use The Nine Tools
 
-The external MCP contract remains exactly nine tools:
+OpenCode exposes the tools with the configured server prefix, for example
+`agz-memory_project_list`. The MCP protocol names remain:
 
 | Tool | Purpose |
 |---|---|
-| `project_list` | List immutable project IDs and current names |
-| `project_create` | Create an empty project |
-| `project_update` | Rename a project without changing its ID |
-| `project_delete` | Permanently delete one confirmed project |
-| `memory_recall` | Project-filtered FTS5 and one-hop graph recall |
-| `memory_update` | Create, patch, or permanently delete notes |
-| `memory_pin` | Set note priority inside one project |
-| `memory_link` | Add same-project graph edges |
-| `memory_read` | Read full note bodies and graph edges |
+| `project_list` | List project identities and note counts. |
+| `project_create` | Create an empty project with a unique name. |
+| `project_update` | Rename a project without changing its UUID. |
+| `project_delete` | Permanently delete one confirmed project and all owned data. |
+| `memory_recall` | Search one project with one or up to ten queries. |
+| `memory_update` | Create, patch, or explicitly delete notes in one project. |
+| `memory_pin` | Prioritize or unprioritize one active note. |
+| `memory_link` | Add typed links between notes in the same project. |
+| `memory_read` | Read full notes, pin state, project identity, and graph neighbors. |
 
-Every `memory_*` request selects exactly one `projectID` or `projectName`.
-Cross-project reads, updates, deletes, links, and recall are rejected. Ordered
-batches are intentionally non-atomic, so inspect every item result.
+Recommended sequence:
 
-Project deletion requires all three values:
+1. Call `project_list` and reuse an existing project when it represents the
+   same durable workspace.
+2. Call `project_create` only when no matching project exists.
+3. Keep the returned `projectID`; names can change, UUIDs cannot.
+4. Call `memory_recall` before relying on historical decisions.
+5. Store only durable, verified facts, decisions, procedures, preferences,
+   research, context, or tasks. Do not store transcripts, secrets, or guesses.
 
-```json
-{
-  "projectID": "<immutable UUID>",
-  "confirmProjectName": "<exact current case-sensitive name>",
-  "confirmation": "DELETE_PROJECT_AND_ALL_MEMORY"
-}
-```
+All multi-item mutations are ordered and non-atomic. Inspect every result:
+earlier items remain applied when a later item fails.
 
-## Optional OpenCode Plugin
+## Add The Optional Plugin
 
-The plugin is a separate package so the moving OpenCode beta dependency never
-enters the MCP-only runtime. Its safe default is `off`.
+Keep the MCP server configured, then add the exact plugin package with inert
+options:
 
 ```jsonc
 {
   "plugins": [
     {
-      "package": "@vaur94/agz-memory-plugin@0.4.0-beta.1",
+      "package": "@vaur94/agz-memory-plugin@0.4.0",
       "options": {
         "mode": "off",
         "autoCreateProjects": false,
@@ -118,120 +135,119 @@ enters the MCP-only runtime. Its safe default is `off`.
 }
 ```
 
-Bindings are explicit allowlist entries. The plugin never selects a memory
-project by basename and never auto-creates one:
+The plugin opens the same database path as the MCP server. It rejects unknown
+configuration fields, automatic project creation, unsupported semantic
+backends, oversized limits, and conflicting bindings.
+
+## Bind Projects Explicitly
+
+The plugin does nothing without exactly one matching binding. Each binding maps
+an OpenCode project/workspace/location to an existing AGZ Memory project:
 
 ```jsonc
 {
-  "memoryProjectID": "<UUID from project_list>",
-  "opencodeProjectID": "<ctx.location.project.id>",
+  "memoryProjectID": "11111111-1111-4111-8111-111111111111",
+  "opencodeProjectID": "your-opencode-project-id",
   "canonicalDirectory": "/absolute/canonical/project/path",
-  "workspaceID": "<optional workspace ID>"
+  "workspaceID": ""
 }
 ```
 
-The rollout modes are cumulative:
+`memoryProjectID` must come from `project_list`. The directory is resolved with
+the filesystem and compared with the active OpenCode location. Only a hash of
+that canonical path is persisted. A mismatched location or duplicate mapping
+disables the plugin rather than selecting a project heuristically.
 
-| Mode | Capture | Retrieval | Injection | Auto-write |
-|---|---:|---:|---:|---:|
+## Roll Out Safely
+
+Modes are intentionally one-way stages:
+
+| Mode | Capture | Retrieval | Injection | Note writes |
+|---|---|---|---|---|
 | `off` | No | No | No | No |
 | `shadow-capture` | Redacted audit only | No | No | No |
-| `shadow-retrieval` | Yes | Metrics only | No | No |
-| `inject` | Yes | Yes | Bounded | No |
-| `auto-write` | Yes | Yes | Bounded | Explicit high-confidence decisions/preferences only |
+| `shadow-retrieval` | Optional redacted audit | Measured only | No | No |
+| `inject` | Optional redacted audit | Lexical and graph | Bounded, untrusted | No |
+| `auto-write` | Policy-gated | Lexical and graph | Bounded, untrusted | High-confidence candidates only |
 
-Injection is fail-open, summary-only, limited to eight cards and 4,800
-characters, and wrapped as `trust="untrusted"`. A memory timeout or binding
-error does not block the main OpenCode request.
+Advance one stage at a time and inspect `agz-memory-admin capture status`,
+database growth, retrieval latency, and false matches before proceeding. To
+disable retrieval, injection, and every capture channel for one complete turn,
+include `[memory:off]` in that prompt. Reconciliation reconstructs this boundary
+from session history after a restart.
+Returning to `off` is always safe and does not delete stored data.
 
-## Capture Safety
+Semantic retrieval remains hard-disabled. `semanticBackend` must be `none`
+until a vendor passes project isolation, delete, purge, rebuild, leakage,
+quality, and latency gates.
 
-The canonical event contract remains `opencode2-memory.capture/1` for database
-and event compatibility with earlier releases.
+## Operate And Recover
 
-- Native session/message/ordinal/tool IDs produce deterministic SHA-256
-  idempotency keys. SQLite uniqueness is the final duplicate guard.
-- Projection discards reasoning, tool input/output, attachments, files, system
-  parts, diffs, environment data, and provider state.
-- Text is redacted before extraction and again inside the core before any DB
-  insert.
-- Private keys, credential URIs, multiple high-risk secrets, and canaries are
-  quarantined without a text payload.
-- Event JSON is limited to 16 KiB; automatic content is limited to 4,800
-  characters.
-- `[memory:off]` disables capture for that user message.
-- Auto-write initially accepts only explicit `preference` and `decision`
-  candidates at confidence `>= 0.95`.
-
-## Schema V9
-
-Schema v9 preserves project, note, edge, timestamp, status, and pin identities
-while adding:
-
-- `project_bindings`
-- `capture_checkpoints`
-- `capture_events`
-- `note_provenance`
-- `note_revisions`
-- `index_outbox`
-
-Every committed note state has provenance and a full revision snapshot. Note
-create, patch, pin, supersession, FTS triggers, and derived-index outbox writes
-share transactions. Normal recall only returns `active` notes.
-
-FTS5 now uses external content and insert/update/delete triggers rather than
-manual synchronization.
-
-## Backup, Upgrade, And Restore
-
-The admin binary writes JSON to stdout and sanitized errors to stderr:
+The admin CLI reads the same `OPENCODE_MEMORY_DATABASE_PATH`:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin doctor
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin backup
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin upgrade --to 9
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin outbox status
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.4.0 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.4.0 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.4.0 agz-memory-admin upgrade --to 10
+bunx --package @vaur94/agz-memory@0.4.0 agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.4.0 agz-memory-admin outbox status
 ```
 
-Every schema upgrade takes an atomic migration lock and creates a verified
-`VACUUM INTO` snapshot plus a SHA-256 manifest before DDL runs. Integrity,
-foreign keys, table counts, revision invariants, and FTS counts are checked.
+Upgrades take an exclusive migration lock and create a verified backup before
+changing the database. A failed migration attempts an automatic verified
+restore. Restore and backup deletion use dry-run output plus explicit
+confirmation values; never guess them.
 
-Restore is dry-run unless the manifest hash and confirmation are supplied:
+Use [the backup and restore runbook](docs/backup-restore-runbook.md) for a full
+rehearsal. Final `0.4.0` backup manifests use `agz-memory-backup/1`; prerelease
+manifests must be handled by the prerelease that created them.
 
-```sh
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin restore \
-  /path/to/memory.sqlite.backup/<manifest>.manifest.json
+## Security Model
 
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin restore \
-  /path/to/memory.sqlite.backup/<manifest>.manifest.json \
-  --sha256 <manifest-database-sha256> \
-  --confirm RESTORE_DATABASE_FROM_VERIFIED_BACKUP
-```
+- Retrieved notes are wrapped in `<agz-memory-context trust="untrusted">` and
+  escaped before injection. Stored text never becomes system policy.
+- Capture projects only terminal user/assistant text and terminal tool status;
+  reasoning, tool input, and tool output payloads are excluded.
+- Credential patterns are redacted before persistence and again before note
+  materialization. Private-key material is quarantined without a payload.
+- Capture events are idempotent by stable source identity and retained with
+  bounded payload lifetimes.
+- Project ownership is enforced in every note and edge query. Cross-project
+  links and backend hits are rejected.
+- The SQLite database is canonical. Derived-index outbox rows contain identity
+  and hashes, not note payloads.
 
-Stop every MCP/plugin writer before an upgrade or restore. The current database
-is preserved as `failed-restore-source-*`; WAL/SHM sidecars are quarantined.
-See [`docs/backup-restore-runbook.md`](docs/backup-restore-runbook.md).
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
-## Semantic Backend Decision
-
-Production remains `semanticBackend: "none"`. The exact vendor contract review
-did not produce a complete live A/B proof for all required server-side project
-filter, deterministic delete, purge, leakage, and latency gates. SQLite
-lexical+graph retrieval is therefore the production path. See
-[`benchmark/baselines/vendor-decision.json`](benchmark/baselines/vendor-decision.json).
-
-## Development
+## Develop And Verify
 
 ```sh
-bun install
+bun install --frozen-lockfile
+bun run release:verify
 bun test
 bun run check
 bun run build
+bun run benchmark 10000 100
 npm pack --dry-run --json
 ```
 
-The test suite includes MCP snapshots, legacy and v8-to-v9 migration fixtures,
-backup/restore, revisions, outbox FIFO, capture idempotency, secret quarantine,
-retrieval isolation, bounded formatter, and exact-beta plugin hook smoke tests.
+`release:verify` rejects package-version drift, mismatched bilingual sections,
+stale beta pins, and any tracked reintroduction of the retired project name.
+The test suite covers project isolation, destructive confirmation, migration,
+backup/restore, capture safety, revisions, provenance, FTS, retrieval, outbox,
+and the exact nine-tool MCP surface.
+
+## Project Resources
+
+- [Architecture](ARCHITECTURE.md)
+- [Changelog](CHANGELOG.md)
+- [Backup and restore runbook](docs/backup-restore-runbook.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [GitHub repository](https://github.com/ugur-murat-alt/agz-memory)
+- [npm core package](https://www.npmjs.com/package/@vaur94/agz-memory)
+- [npm plugin package](https://www.npmjs.com/package/@vaur94/agz-memory-plugin)
+
+## License
+
+[MIT](LICENSE)

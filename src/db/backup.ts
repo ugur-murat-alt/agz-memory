@@ -17,7 +17,7 @@ import {
 import { basename, dirname, join, resolve } from "path";
 import { assertHealthyDatabase, inspectDatabase } from "./health";
 
-export const BACKUP_FORMAT = "opencode2-memory-backup/1" as const;
+export const BACKUP_FORMAT = "agz-memory-backup/1" as const;
 
 export interface BackupManifest {
   format: typeof BACKUP_FORMAT;

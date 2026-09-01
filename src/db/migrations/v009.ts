@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "crypto";
 import type { Database } from "bun:sqlite";
-import { FTS_V9, SCHEMA_V9_TABLES, rebuildFts } from "../schema";
+import { FTS_V9, SCHEMA_TABLES, rebuildFts } from "../schema";
 
 interface LegacyNoteRow {
   id: string;
@@ -98,7 +98,7 @@ export function migrateV8ToV9(db: Database): void {
     ALTER TABLE notes_v9 RENAME TO notes;
     ALTER TABLE note_edges_v9 RENAME TO note_edges;
   `);
-  db.exec(SCHEMA_V9_TABLES);
+  db.exec(SCHEMA_TABLES);
   for (const note of notes) {
     const provenanceID = randomUUID();
     db.query(`

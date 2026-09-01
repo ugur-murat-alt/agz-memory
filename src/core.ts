@@ -45,3 +45,4 @@ export * from "./retrieval/contract";
 export * from "./retrieval/formatter";
 export * from "./store/capture";
 export * from "./types";
+export * from "./version";

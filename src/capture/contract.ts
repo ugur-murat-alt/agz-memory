@@ -1,7 +1,7 @@
 import * as z from "zod/v4";
 import { KINDS } from "../types";
 
-export const CAPTURE_SCHEMA = "opencode2-memory.capture/1" as const;
+export const CAPTURE_SCHEMA = "agz-memory.capture/1" as const;
 export const SUPPORTED_OPENCODE_VERSION = "0.0.0-beta-18743" as const;
 export const CAPTURE_EVENT_MAX_BYTES = 16 * 1024;
 export const CAPTURE_CONTENT_MAX_CHARACTERS = 4_800;

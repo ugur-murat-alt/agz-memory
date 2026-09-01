@@ -1,6 +1,6 @@
 {
   "name": "@vaur94/agz-memory-plugin",
-  "version": "0.4.0-beta.1",
+  "version": "0.4.0",
   "description": "Safe automatic memory capture and bounded context injection for OpenCode V2",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,11 +13,13 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "README.tr.md"
   ],
   "scripts": {
     "build": "rm -rf dist && bun build src/index.ts --target bun --format esm --packages external --outfile dist/index.js && bunx tsc -p tsconfig.build.json",
-    "check": "bunx tsc --noEmit"
+    "check": "bunx tsc --noEmit",
+    "prepack": "bun run check && bun run build"
   },
   "engines": {
     "bun": ">=1.3.14"
@@ -37,6 +39,6 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "0.0.0-beta-18743",
-    "@vaur94/agz-memory": "0.4.0-beta.1"
+    "@vaur94/agz-memory": "0.4.0"
   }
 }

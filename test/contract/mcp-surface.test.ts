@@ -11,6 +11,7 @@ import { MEMORY_GUIDANCE } from "../../src/context";
 import { formatUntrustedContext } from "../../src/retrieval/formatter";
 import { createMemoryServer } from "../../src/server";
 import { MemoryStore } from "../../src/store";
+import { PRODUCT_VERSION } from "../../src/version";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -19,9 +20,9 @@ afterEach(async () => {
 });
 
 describe("MCP compatibility surface", () => {
-  test("preserves persisted and configuration compatibility identifiers", () => {
-    expect(CAPTURE_SCHEMA).toBe("opencode2-memory.capture/1");
-    expect(BACKUP_FORMAT).toBe("opencode2-memory-backup/1");
+  test("keeps final persisted and configuration identities stable", () => {
+    expect(CAPTURE_SCHEMA).toBe("agz-memory.capture/1");
+    expect(BACKUP_FORMAT).toBe("agz-memory-backup/1");
     expect(
       formatUntrustedContext("project-id", [
         {
@@ -35,7 +36,7 @@ describe("MCP compatibility surface", () => {
           pinned: false,
           via: "match",
         },
-      ])?.startsWith('<opencode2-memory-context trust="untrusted" project-id="project-id">'),
+      ])?.startsWith('<agz-memory-context trust="untrusted" project-id="project-id">'),
     ).toBe(true);
     expect(resolveConfig({ HOME: "/tmp/agz-memory-contract-home" }).databasePath).toBe(
       "/tmp/agz-memory-contract-home/.local/share/opencode-memory/memory.sqlite",
@@ -60,7 +61,7 @@ describe("MCP compatibility surface", () => {
       rmSync(directory, { recursive: true, force: true });
     });
 
-    expect(client.getServerVersion()).toEqual({ name: "agz-memory", version: "0.4.0-beta.1" });
+    expect(client.getServerVersion()).toEqual({ name: "agz-memory", version: PRODUCT_VERSION });
     expect(client.getInstructions()).toBe(MEMORY_GUIDANCE);
     const { tools } = await client.listTools();
     expect(

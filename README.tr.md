@@ -2,39 +2,55 @@
 
 [English](README.md) | Türkçe
 
-OpenCode V2 için proje kapsamlı kalıcı hafıza. Depo, sürümleri birlikte ilerleyen
-iki paket yayımlar:
+AGZ Memory, OpenCode V2'ye proje kapsamlı ve bağlantılı kalıcı hafıza kazandırır.
+Aynı sürümde ilerleyen, birbirinden bağımsız kullanılabilen iki paket sunar:
 
-- `@vaur94/agz-memory`: dokuz araçlı stdio MCP sunucusu, yeniden kullanılabilir
-  çekirdek ve kurtarma odaklı yönetim komut satırı aracı.
-- `@vaur94/agz-memory-plugin`: exact bir OpenCode V2 beta sürümü için isteğe
-  bağlı güvenli yakalama ve sınırlı bağlam ekleme eklentisi.
+- `@vaur94/agz-memory`: SQLite tabanlı dokuz araçlı MCP sunucusu, TypeScript
+  çekirdeği ve kurtarma komut satırı aracı.
+- `@vaur94/agz-memory-plugin`: sınırlı geri çağırma ve bilinçli olarak aşamalı
+  otomatik yakalama için isteğe bağlı OpenCode V2 bağdaştırıcısı.
 
-SQLite schema v9, tek yetkili veri kaynağıdır. İsteğe bağlı anlamsal servisler
-yeniden üretilebilir türetilmiş indekslerdir; izolasyon, silme, temizleme ve
-kalite sözleşmeleri benchmark kapılarından geçmedikçe kapalı kalır.
+MCP sunucusu normal kullanım için hazırdır. Eklenti hareketsiz başlar: açık bir
+eşleme ve devreye alma modu verilene kadar proje oluşturmaz, oturum yakalamaz ve
+bağlam eklemez.
+
+## Neden AGZ Memory
+
+- Her okuma ve değişiklik, değişmez proje UUID'si veya benzersiz proje adıyla
+  sınırlandırılır.
+- Notlar projeler karışmadan sabitlenebilir, bağlanabilir, hükümsüz bırakılabilir,
+  sürümlenebilir, aranabilir ve incelenebilir.
+- SQLite schema v10 tek yetkili veri kaynağıdır; isteğe bağlı anlamsal indeksler
+  yeniden üretilebilir türevlerdir.
+- Yıkıcı proje silme işlemi değişmez ID, güncel ad ve sabit onay ifadesi ister.
+- Yedek manifestleri geri yüklemeden önce satır sayılarını, SQLite bütünlüğünü,
+  boyutu ve SHA-256 değerini doğrular.
+- Otomatik yakalama maskelenmiş, sınırlı, yinelenmeye dayanıklı ve varsayılan
+  olarak kapalıdır.
 
 ## Uyumluluk
 
-| Bileşen | Sürüm |
+| Bileşen | Desteklenen sürüm |
 |---|---|
-| Core/MCP | `0.4.0-beta.1` |
-| Plugin | `0.4.0-beta.1` |
+| Çekirdek ve MCP | `0.4.0` |
+| OpenCode eklentisi | `0.4.0` |
 | OpenCode V2 | `0.0.0-beta-18743` |
 | `@opencode-ai/plugin` | `0.0.0-beta-18743` |
 | Bun | `>=1.3.14` |
-| SQLite schema | `9` |
+| SQLite schema | `10` |
 
-Eklenti, çalışan OpenCode sürümü desteklenen beta ile tam eşleşmediğinde
-kendisini devre dışı bırakır. MCP sunucusu bağımsız olarak kullanılabilir.
+MCP sunucusu bir OpenCode beta sürümüne bağlı değildir. İsteğe bağlı eklenti,
+çalışan OpenCode sürümü desteklenen beta ile tam eşleşmezse kendini kapatır.
 
-## MCP Sunucusu
+## MCP Sunucusunu Kurma
+
+Sunucuyu doğrudan çalıştırın:
 
 ```sh
-bunx @vaur94/agz-memory@0.4.0-beta.1
+bunx @vaur94/agz-memory@0.4.0
 ```
 
-OpenCode V2 yapılandırması `mcp.servers` alanını kullanır:
+Ya da OpenCode V2 içinde `mcp.servers` altına kaydedin:
 
 ```jsonc
 {
@@ -42,7 +58,7 @@ OpenCode V2 yapılandırması `mcp.servers` alanını kullanır:
     "servers": {
       "agz-memory": {
         "type": "local",
-        "command": ["bunx", "@vaur94/agz-memory@0.4.0-beta.1"],
+        "command": ["bunx", "@vaur94/agz-memory@0.4.0"],
         "environment": {
           "OPENCODE_MEMORY_DATABASE_PATH": "{env:OPENCODE_MEMORY_DATABASE_PATH}"
         },
@@ -53,49 +69,52 @@ OpenCode V2 yapılandırması `mcp.servers` alanını kullanır:
 }
 ```
 
-Varsayılan veritabanı yolu `~/.local/share/opencode-memory/memory.sqlite` olur.
-OpenCode başlamadan önce `OPENCODE_MEMORY_DATABASE_PATH` ile değiştirilebilir.
+Varsayılan veritabanı
+`~/.local/share/opencode-memory/memory.sqlite` konumundadır. Başka bir yol için
+OpenCode başlamadan önce `OPENCODE_MEMORY_DATABASE_PATH` ayarlayın. Veritabanı
+dosyası yalnız kullanıcı erişimine açık izinlerle oluşturulur.
 
-### Araçlar
+## Dokuz Aracı Kullanma
 
-Dış MCP sözleşmesi tam olarak dokuz araçtan oluşur:
+OpenCode araçları yapılandırılan sunucu önekiyle gösterir; örneğin
+`agz-memory_project_list`. MCP protokolündeki adlar şunlardır:
 
 | Araç | Amaç |
 |---|---|
-| `project_list` | Değişmez proje kimliklerini ve güncel adları listeler |
-| `project_create` | Boş bir proje oluşturur |
-| `project_update` | Kimliği değiştirmeden projeyi yeniden adlandırır |
-| `project_delete` | Onaylanmış tek bir projeyi kalıcı olarak siler |
-| `memory_recall` | Proje filtreli FTS5 ve tek adımlı grafik araması yapar |
-| `memory_update` | Not oluşturur, günceller veya kalıcı olarak siler |
-| `memory_pin` | Proje içindeki not önceliğini ayarlar |
-| `memory_link` | Aynı proje içinde grafik bağlantısı ekler |
-| `memory_read` | Tam not içeriklerini ve grafik bağlantılarını okur |
+| `project_list` | Proje kimliklerini ve not sayılarını listeler. |
+| `project_create` | Benzersiz adla boş proje oluşturur. |
+| `project_update` | UUID'yi değiştirmeden projeyi yeniden adlandırır. |
+| `project_delete` | Onaylanan tek projeyi ve sahip olduğu tüm veriyi kalıcı siler. |
+| `memory_recall` | Bir projeyi bir veya en fazla on sorguyla arar. |
+| `memory_update` | Bir projede not oluşturur, değiştirir veya açıkça siler. |
+| `memory_pin` | Etkin bir notun önceliğini açar veya kapatır. |
+| `memory_link` | Aynı projedeki notlar arasında türü belirli bağ kurar. |
+| `memory_read` | Tam notları, sabitleme durumunu, proje kimliğini ve komşuları okur. |
 
-Her `memory_*` isteği tam olarak bir `projectID` veya `projectName` seçer.
-Projeler arası okuma, güncelleme, silme, bağlantı ve arama reddedilir. Sıralı
-toplu işlemler kasıtlı olarak atomik değildir; her öğenin sonucu incelenmelidir.
+Önerilen sıra:
 
-Proje silmek için üç değerin de sağlanması gerekir:
+1. `project_list` çağırın ve aynı kalıcı çalışma alanını temsil eden mevcut
+   projeyi yeniden kullanın.
+2. Yalnız eşleşen proje yoksa `project_create` çağırın.
+3. Dönen `projectID` değerini saklayın; ad değişebilir, UUID değişmez.
+4. Geçmiş kararlara dayanmadan önce `memory_recall` çağırın.
+5. Yalnız kalıcı ve doğrulanmış olguları, kararları, prosedürleri, tercihleri,
+   araştırmaları, bağlamı veya görevleri saklayın. Konuşma dökümü, sır ya da
+   tahmin saklamayın.
 
-```json
-{
-  "projectID": "<immutable UUID>",
-  "confirmProjectName": "<exact current case-sensitive name>",
-  "confirmation": "DELETE_PROJECT_AND_ALL_MEMORY"
-}
-```
+Çok öğeli değişiklikler sıralıdır ve topluca geri alınmaz. Her sonucu inceleyin:
+sonraki öğe başarısız olsa da önceki öğeler uygulanmış kalır.
 
-## İsteğe Bağlı OpenCode Eklentisi
+## İsteğe Bağlı Eklentiyi Ekleme
 
-Hareketli OpenCode beta bağımlılığının yalnız MCP kullanan çalışma ortamına
-girmemesi için eklenti ayrı bir pakettir. Güvenli varsayılanı `off` değeridir.
+MCP sunucusunu yapılandırılmış tutun ve tam sürümlü eklenti paketini hareketsiz
+ayarlarla ekleyin:
 
 ```jsonc
 {
   "plugins": [
     {
-      "package": "@vaur94/agz-memory-plugin@0.4.0-beta.1",
+      "package": "@vaur94/agz-memory-plugin@0.4.0",
       "options": {
         "mode": "off",
         "autoCreateProjects": false,
@@ -117,124 +136,119 @@ girmemesi için eklenti ayrı bir pakettir. Güvenli varsayılanı `off` değeri
 }
 ```
 
-Bağlamalar açık izin listesi girdileridir. Eklenti bir hafıza projesini hiçbir
-zaman klasör adına göre seçmez ve otomatik proje oluşturmaz:
+Eklenti MCP sunucusuyla aynı veritabanı yolunu açar. Bilinmeyen ayar alanlarını,
+otomatik proje oluşturmayı, desteklenmeyen anlamsal servisleri, sınır dışı
+değerleri ve çakışan eşlemeleri reddeder.
+
+## Projeleri Açıkça Eşleme
+
+Eklenti, tam bir eşleşen eşleme olmadan hiçbir şey yapmaz. Her eşleme bir
+OpenCode proje/çalışma alanı/konumunu mevcut AGZ Memory projesine bağlar:
 
 ```jsonc
 {
-  "memoryProjectID": "<UUID from project_list>",
-  "opencodeProjectID": "<ctx.location.project.id>",
+  "memoryProjectID": "11111111-1111-4111-8111-111111111111",
+  "opencodeProjectID": "your-opencode-project-id",
   "canonicalDirectory": "/absolute/canonical/project/path",
-  "workspaceID": "<optional workspace ID>"
+  "workspaceID": ""
 }
 ```
 
-Rollout modları birikimli olarak ilerler:
+`memoryProjectID`, `project_list` sonucundan gelmelidir. Dizin gerçek dosya
+sistemi yoluna çözülür ve etkin OpenCode konumuyla karşılaştırılır. Yalnız bu
+kanonik yolun özeti veritabanına yazılır. Yanlış konum veya çift eşleme,
+sezgisel proje seçmek yerine eklentiyi kapatır.
 
-| Mod | Yakalama | Getirme | Ekleme | Otomatik yazma |
-|---|---:|---:|---:|---:|
+## Güvenli Devreye Alma
+
+Modlar bilinçli olarak tek yönlü aşamalardır:
+
+| Mod | Yakalama | Geri çağırma | Bağlam ekleme | Not yazma |
+|---|---|---|---|---|
 | `off` | Hayır | Hayır | Hayır | Hayır |
 | `shadow-capture` | Yalnız maskelenmiş denetim | Hayır | Hayır | Hayır |
-| `shadow-retrieval` | Evet | Yalnız ölçüm | Hayır | Hayır |
-| `inject` | Evet | Evet | Sınırlı | Hayır |
-| `auto-write` | Evet | Evet | Sınırlı | Yalnız açık ve yüksek güvenli karar/tercihler |
+| `shadow-retrieval` | İsteğe bağlı maskelenmiş denetim | Yalnız ölçüm | Hayır | Hayır |
+| `inject` | İsteğe bağlı maskelenmiş denetim | Sözcüksel ve grafik | Sınırlı, güvenilmeyen | Hayır |
+| `auto-write` | İlke denetimli | Sözcüksel ve grafik | Sınırlı, güvenilmeyen | Yalnız yüksek güvenli adaylar |
 
-Bağlam ekleme fail-open çalışır; yani hafıza hatası ana isteği engellemez. Yalnız
-özetleri kullanır, sekiz kart ve 4.800 karakterle sınırlıdır ve
-`trust="untrusted"` olarak sarılır. Hafıza zaman aşımı veya bağlama hatası ana
-OpenCode isteğini durdurmaz.
+Her seferinde tek aşama ilerleyin. Devam etmeden önce
+`agz-memory-admin capture status`, veritabanı büyümesi, geri çağırma gecikmesi ve
+yanlış eşleşmeleri inceleyin. Bir turun geri çağırma, bağlam ekleme ve tüm
+yakalama kanallarını kapatmak için o isteme `[memory:off]` ekleyin. Uzlaştırma,
+yeniden başlatma sonrasında bu sınırı oturum geçmişinden tekrar kurar. `off`
+moduna dönmek her zaman güvenlidir ve kayıtlı veriyi silmez.
 
-## Yakalama Güvenliği
+Anlamsal geri çağırma kod tarafından kapalı tutulur. Bir sağlayıcı proje
+izolasyonu, silme, proje temizleme, yeniden kurma, sızıntı, kalite ve gecikme
+kapılarından geçene kadar `semanticBackend` değeri `none` olmalıdır.
 
-Veritabanı ve önceki sürümlerin olay uyumluluğu için yetkili olay sözleşmesi
-`opencode2-memory.capture/1` olarak korunur.
+## İşletme Ve Kurtarma
 
-- Yerel session/message/ordinal/tool kimlikleri belirlenebilir SHA-256 tekilleştirme
-  anahtarları üretir. SQLite benzersizliği son tekrar korumasıdır.
-- Projeksiyon; reasoning, araç girdisi/çıktısı, ekler, dosyalar, sistem parçaları,
-  diff, ortam verileri ve sağlayıcı durumunu atar.
-- Metin, çıkarımdan önce ve veritabanına yazılmadan önce çekirdek içinde tekrar
-  maskelenir.
-- Özel anahtarlar, kimlik bilgisi URI'ları, birden çok yüksek riskli sır ve
-  canary değerleri metin yükü olmadan karantinaya alınır.
-- Olay JSON'u 16 KiB, otomatik içerik 4.800 karakter ile sınırlıdır.
-- `[memory:off]`, ilgili kullanıcı mesajı için yakalamayı kapatır.
-- Otomatik yazma başlangıçta yalnız güveni `>= 0.95` olan açık `preference` ve
-  `decision` adaylarını kabul eder.
-
-## Schema V9
-
-Schema v9; proje, not, bağlantı, zaman damgası, durum ve pin kimliklerini korur.
-Eklenen tablolar:
-
-- `project_bindings`
-- `capture_checkpoints`
-- `capture_events`
-- `note_provenance`
-- `note_revisions`
-- `index_outbox`
-
-Kaydedilen her not durumunda kaynak bilgisi ve tam revision görüntüsü bulunur.
-Not oluşturma, güncelleme, pin, supersession, FTS trigger ve türetilmiş indeks
-outbox yazımları aynı transaction içinde yapılır. Normal arama yalnız `active`
-notları döndürür.
-
-FTS5 artık elle eşitleme yerine dış içerik ile insert/update/delete trigger'larını
-kullanır.
-
-## Yedekleme, Yükseltme Ve Geri Yükleme
-
-Yönetim binary'si JSON çıktısını stdout'a, temizlenmiş hataları stderr'e yazar:
+Yönetim aracı aynı `OPENCODE_MEMORY_DATABASE_PATH` değerini okur:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin doctor
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin backup
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin upgrade --to 9
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin outbox status
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.4.0 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.4.0 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.4.0 agz-memory-admin upgrade --to 10
+bunx --package @vaur94/agz-memory@0.4.0 agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.4.0 agz-memory-admin outbox status
 ```
 
-Her schema yükseltmesi atomik bir migration lock alır ve DDL çalışmadan önce
-SHA-256 manifest içeren doğrulanmış bir `VACUUM INTO` snapshot oluşturur.
-Bütünlük, foreign key, tablo sayıları, revision kuralları ve FTS sayıları kontrol
-edilir.
+Yükseltmeler özel bir geçiş kilidi alır ve veritabanını değiştirmeden önce
+doğrulanmış yedek oluşturur. Başarısız geçiş otomatik doğrulanmış geri yükleme
+dener. Geri yükleme ve yedek silme işlemleri önce deneme çıktısı, sonra açık
+onay değerleri ister; bu değerleri tahmin etmeyin.
 
-Manifest hash'i ve onay sağlanmadıkça geri yükleme yalnız kuru çalışır:
+Tam prova için [yedekleme ve geri yükleme runbook'unu](docs/backup-restore-runbook.tr.md)
+kullanın. Final `0.4.0` yedek manifestleri `agz-memory-backup/1` kullanır;
+ön sürüm manifestleri onları oluşturan ön sürümle işlenmelidir.
 
-```sh
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin restore \
-  /path/to/memory.sqlite.backup/<manifest>.manifest.json
+## Güvenlik Modeli
 
-bunx --package @vaur94/agz-memory@0.4.0-beta.1 agz-memory-admin restore \
-  /path/to/memory.sqlite.backup/<manifest>.manifest.json \
-  --sha256 <manifest-database-sha256> \
-  --confirm RESTORE_DATABASE_FROM_VERIFIED_BACKUP
-```
+- Geri çağrılan notlar `<agz-memory-context trust="untrusted">` içine alınır ve
+  eklenmeden önce kaçışlanır. Saklanan metin sistem kuralına dönüşmez.
+- Yakalama yalnız son kullanıcı/asistan metnini ve son araç durumunu alır;
+  muhakeme, araç girdisi ve araç çıktı yükleri dışarıda bırakılır.
+- Kimlik bilgisi desenleri kalıcılaştırmadan önce ve not oluşturmadan önce tekrar
+  maskelenir. Özel anahtar malzemesi yük saklanmadan karantinaya alınır.
+- Yakalama olayları sabit kaynak kimliğiyle yinelenmeye dayanıklıdır ve yükleri
+  sınırlı süre tutulur.
+- Her not ve ilişki sorgusunda proje sahipliği uygulanır. Projeler arası bağlar
+  ve dış indeks sonuçları reddedilir.
+- SQLite tek yetkili kaynaktır. Türetilmiş indeks kuyruğu not yükü yerine kimlik
+  ve özet değerleri taşır.
 
-Yükseltme veya geri yükleme öncesinde tüm MCP/plugin yazıcılarını durdurun. Güncel
-veritabanı `failed-restore-source-*` olarak korunur; WAL/SHM yan dosyaları
-karantinaya alınır. Ayrıntılar için
-[`docs/backup-restore-runbook.md`](docs/backup-restore-runbook.md) belgesine bakın.
+Güvenlik açıklarını [SECURITY.md](SECURITY.md) içindeki özel kanaldan bildirin.
 
-## Anlamsal Backend Kararı
-
-Üretim `semanticBackend: "none"` olarak kalır. Tam vendor sözleşmesi incelemesi,
-zorunlu sunucu tarafı proje filtresi, belirlenebilir silme, purge, sızıntı ve
-gecikme kapılarının tümü için eksiksiz canlı A/B kanıtı üretmedi. Bu nedenle
-üretim yolu SQLite metin+grafik aramasıdır. Ayrıntılar:
-[`benchmark/baselines/vendor-decision.json`](benchmark/baselines/vendor-decision.json).
-
-## Geliştirme
+## Geliştirme Ve Doğrulama
 
 ```sh
-bun install
+bun install --frozen-lockfile
+bun run release:verify
 bun test
 bun run check
 bun run build
+bun run benchmark 10000 100
 npm pack --dry-run --json
 ```
 
-Test paketi; MCP snapshot'ları, eski sürüm ve v8-to-v9 migration fixture'ları,
-yedekleme/geri yükleme, revision'lar, outbox FIFO, capture tekilleştirme, sır
-karantinası, retrieval izolasyonu, sınırlı formatter ve exact-beta plugin hook
-smoke testlerini içerir.
+`release:verify`; paket sürümü sapmasını, iki dildeki bölüm uyuşmazlığını, eski
+beta pinlerini ve kullanımdan kaldırılan proje adının tracked dosyalara yeniden
+girmesini reddeder. Testler proje izolasyonu, yıkıcı onay, schema geçişi,
+yedekleme/geri yükleme, yakalama güvenliği, revision, provenance, FTS, geri
+çağırma, outbox ve tam dokuz araçlı MCP yüzeyini kapsar.
+
+## Proje Kaynakları
+
+- [Mimari](ARCHITECTURE.md)
+- [Değişiklik günlüğü](CHANGELOG.md)
+- [Yedekleme ve geri yükleme runbook'u](docs/backup-restore-runbook.tr.md)
+- [Katkı rehberi](CONTRIBUTING.md)
+- [Güvenlik politikası](SECURITY.md)
+- [GitHub deposu](https://github.com/ugur-murat-alt/agz-memory)
+- [npm çekirdek paketi](https://www.npmjs.com/package/@vaur94/agz-memory)
+- [npm eklenti paketi](https://www.npmjs.com/package/@vaur94/agz-memory-plugin)
+
+## Lisans
+
+[MIT](LICENSE)

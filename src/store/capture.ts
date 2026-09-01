@@ -257,7 +257,7 @@ export class CaptureStore {
          SET payload_json = NULL, payload_hash = NULL, updated_at = ?
        WHERE idempotency_key IN (
          SELECT idempotency_key FROM capture_events
-          WHERE state IN ('materialized','duplicate','ignored','rejected','shadowed')
+          WHERE state IN ('materialized','duplicate','ignored','rejected','shadowed','review','failed','dead')
             AND processed_at < ? AND payload_json IS NOT NULL
           ORDER BY processed_at LIMIT ?
        )
@@ -274,12 +274,32 @@ export class CaptureStore {
       DELETE FROM capture_checkpoints
        WHERE session_id IN (
          SELECT session_id FROM capture_checkpoints
-          WHERE (state = 'idle' AND updated_at < ?)
+          WHERE (state IN ('idle','closed') AND updated_at < ?)
              OR (state = 'unavailable' AND updated_at < ?)
           ORDER BY updated_at LIMIT ?
        )
     `).run(terminalCutoff, quarantineCutoff, batchSize).changes;
     return { summarized, deleted, checkpoints };
+  }
+
+  runRetentionBacklog(
+    now = Date.now(),
+    batchSize = 100,
+    maxBatches = 10,
+  ): { summarized: number; deleted: number; checkpoints: number } {
+    const total = { summarized: 0, deleted: 0, checkpoints: 0 };
+    for (let batch = 0; batch < maxBatches; batch++) {
+      const result = this.runRetention(now, batchSize);
+      total.summarized += result.summarized;
+      total.deleted += result.deleted;
+      total.checkpoints += result.checkpoints;
+      if (
+        result.summarized < batchSize &&
+        result.deleted < batchSize &&
+        result.checkpoints < batchSize
+      ) break;
+    }
+    return total;
   }
 
   private materialize(
