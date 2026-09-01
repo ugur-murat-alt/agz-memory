@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@vaur94/opencode2-memory",
+      "name": "@vaur94/agz-memory",
       "dependencies": {
         "@modelcontextprotocol/server": "^2.0.0",
         "zod": "^4.2.0",

@@ -3,7 +3,7 @@ import {
   projectAssistantParts,
   redactText,
   type MemoryCandidateV1,
-} from "@vaur94/opencode2-memory/core";
+} from "@vaur94/agz-memory/core";
 
 export function safeUserCandidate(text: string, denylist: readonly string[] = []) {
   const projected = text.slice(0, 4_800);

@@ -16,10 +16,10 @@ afterEach(async () => {
 });
 
 async function createHarness() {
-  const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-"));
+  const directory = mkdtempSync(join(tmpdir(), "agz-memory-"));
   const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
   const server = createMemoryServer(new MemoryStore(opened.db));
-  const client = new Client({ name: "opencode2-memory-test", version: "1.0.0" });
+  const client = new Client({ name: "agz-memory-test", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
@@ -97,7 +97,7 @@ function createPreV6Database(path: string, version: number, withPinned: boolean)
 
 describe("project-scoped memory MCP server", () => {
   test("migrates core legacy notes into a UUID project", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-legacy-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-legacy-"));
     const databasePath = join(directory, "memory.sqlite");
     const legacy = new Database(databasePath, { create: true });
     legacy.exec(`
@@ -149,7 +149,7 @@ describe("project-scoped memory MCP server", () => {
   });
 
   test("migrates v5 notes and rebuilds project-scoped search", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-v5-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-v5-"));
     const databasePath = join(directory, "memory.sqlite");
     createPreV6Database(databasePath, 5, false);
 
@@ -164,7 +164,7 @@ describe("project-scoped memory MCP server", () => {
   });
 
   test("preserves pin state from an older schema", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-pinned-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-pinned-"));
     const databasePath = join(directory, "memory.sqlite");
     createPreV6Database(databasePath, 4, true);
     const migrated = openMemoryDatabase(databasePath);
@@ -177,7 +177,7 @@ describe("project-scoped memory MCP server", () => {
   });
 
   test("rekeys existing non-UUID projects without changing their names", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-project-id-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-project-id-"));
     const databasePath = join(directory, "memory.sqlite");
     createPreV6Database(databasePath, 6, false);
     const old = new Database(databasePath);
@@ -221,7 +221,7 @@ describe("project-scoped memory MCP server", () => {
   });
 
   test("rejects a database created by a newer schema without adding tables", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-newer-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-newer-"));
     const databasePath = join(directory, "memory.sqlite");
     const newer = new Database(databasePath, { create: true });
     newer.exec("CREATE TABLE schema_state (version INTEGER PRIMARY KEY); INSERT INTO schema_state VALUES (99)");
@@ -239,7 +239,7 @@ describe("project-scoped memory MCP server", () => {
   });
 
   test("imports same-project legacy associations while upgrading v7", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-associations-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-associations-"));
     const databasePath = join(directory, "memory.sqlite");
     const opened = openMemoryDatabase(databasePath);
     const store = new MemoryStore(opened.db);
@@ -428,7 +428,7 @@ describe("project-scoped memory MCP server", () => {
   });
 
   test("enforces project edge integrity and cleans project storage", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-integrity-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-integrity-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     const store = new MemoryStore(opened.db);
     const alphaID = store.createProject("Alpha").project!.projectID;
@@ -538,7 +538,7 @@ describe("project-scoped memory MCP server", () => {
   });
 
   test("serves the project tools through the stdio entrypoint", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-stdio-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-stdio-"));
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: ["src/index.ts"],

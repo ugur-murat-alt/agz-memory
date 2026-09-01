@@ -5,20 +5,20 @@ import {
   openMemoryCore,
   SUPPORTED_OPENCODE_VERSION,
   type MemoryCore,
-} from "@vaur94/opencode2-memory/core";
+} from "@vaur94/agz-memory/core";
 import { resolveBinding } from "./binding";
 import { parseOptions } from "./config";
 import { PluginRuntime } from "./runtime";
 
 export default Plugin.define({
-  id: "opencode2-memory",
+  id: "agz-memory",
   async setup(ctx) {
     const options = parseOptions(ctx.options);
     if (options.mode === "off" || options.bindings.length === 0) return;
     if (ctx.app.version !== SUPPORTED_OPENCODE_VERSION) {
       process.stderr.write(
         `${JSON.stringify({
-          component: "opencode2-memory-plugin",
+          component: "agz-memory-plugin",
           operation: "setup",
           outcome: "disabled",
           error_code: "opencode_version_mismatch",
@@ -48,7 +48,7 @@ export default Plugin.define({
       core?.close();
       process.stderr.write(
         `${JSON.stringify({
-          component: "opencode2-memory-plugin",
+          component: "agz-memory-plugin",
           operation: "setup",
           outcome: "disabled",
           error_code: error instanceof Error && /binding/i.test(error.message) ? "binding_conflict" : "database_unavailable",

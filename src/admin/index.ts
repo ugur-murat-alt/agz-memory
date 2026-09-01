@@ -313,7 +313,7 @@ if (import.meta.main) {
     }
   } catch (error) {
     process.stderr.write(
-      `[opencode2-memory-admin] ${error instanceof Error ? error.message : String(error)}\n`,
+      `[agz-memory-admin] ${error instanceof Error ? error.message : String(error)}\n`,
     );
     process.exitCode = 1;
   }

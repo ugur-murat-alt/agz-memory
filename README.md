@@ -1,11 +1,13 @@
-# OpenCode2 Memory
+# AGZ Memory
+
+English | [Türkçe](README.tr.md)
 
 Project-scoped persistent memory for OpenCode V2. The repository publishes two
 lockstep packages:
 
-- `@vaur94/opencode2-memory`: the nine-tool stdio MCP server, reusable core, and
+- `@vaur94/agz-memory`: the nine-tool stdio MCP server, reusable core, and
   recovery-oriented admin CLI.
-- `@vaur94/opencode2-memory-plugin`: optional safe capture and bounded context
+- `@vaur94/agz-memory-plugin`: optional safe capture and bounded context
   injection for an exact OpenCode V2 beta.
 
 SQLite schema v9 is the canonical source of truth. Optional semantic services
@@ -29,7 +31,7 @@ match its supported beta. The MCP server remains independently usable.
 ## MCP Server
 
 ```sh
-bunx @vaur94/opencode2-memory@0.4.0-beta.1
+bunx @vaur94/agz-memory@0.4.0-beta.1
 ```
 
 OpenCode V2 configuration uses `mcp.servers`:
@@ -38,9 +40,9 @@ OpenCode V2 configuration uses `mcp.servers`:
 {
   "mcp": {
     "servers": {
-      "opencode2-memory": {
+      "agz-memory": {
         "type": "local",
-        "command": ["bunx", "@vaur94/opencode2-memory@0.4.0-beta.1"],
+        "command": ["bunx", "@vaur94/agz-memory@0.4.0-beta.1"],
         "environment": {
           "OPENCODE_MEMORY_DATABASE_PATH": "{env:OPENCODE_MEMORY_DATABASE_PATH}"
         },
@@ -94,7 +96,7 @@ enters the MCP-only runtime. Its safe default is `off`.
 {
   "plugins": [
     {
-      "package": "@vaur94/opencode2-memory-plugin@0.4.0-beta.1",
+      "package": "@vaur94/agz-memory-plugin@0.4.0-beta.1",
       "options": {
         "mode": "off",
         "autoCreateProjects": false,
@@ -144,7 +146,8 @@ error does not block the main OpenCode request.
 
 ## Capture Safety
 
-The canonical event contract is `opencode2-memory.capture/1`.
+The canonical event contract remains `opencode2-memory.capture/1` for database
+and event compatibility with earlier releases.
 
 - Native session/message/ordinal/tool IDs produce deterministic SHA-256
   idempotency keys. SQLite uniqueness is the final duplicate guard.
@@ -184,11 +187,11 @@ manual synchronization.
 The admin binary writes JSON to stdout and sanitized errors to stderr:
 
 ```sh
-opencode2-memory-admin doctor
-opencode2-memory-admin backup
-opencode2-memory-admin upgrade --to 9
-opencode2-memory-admin outbox status
-opencode2-memory-admin capture status
+agz-memory-admin doctor
+agz-memory-admin backup
+agz-memory-admin upgrade --to 9
+agz-memory-admin outbox status
+agz-memory-admin capture status
 ```
 
 Every schema upgrade takes an atomic migration lock and creates a verified
@@ -198,9 +201,9 @@ foreign keys, table counts, revision invariants, and FTS counts are checked.
 Restore is dry-run unless the manifest hash and confirmation are supplied:
 
 ```sh
-opencode2-memory-admin restore /path/to/memory.sqlite.backup/<manifest>.manifest.json
+agz-memory-admin restore /path/to/memory.sqlite.backup/<manifest>.manifest.json
 
-opencode2-memory-admin restore /path/to/memory.sqlite.backup/<manifest>.manifest.json \
+agz-memory-admin restore /path/to/memory.sqlite.backup/<manifest>.manifest.json \
   --sha256 <manifest-database-sha256> \
   --confirm RESTORE_DATABASE_FROM_VERIFIED_BACKUP
 ```

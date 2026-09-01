@@ -1,19 +1,19 @@
-# OpenCode2 Memory v9 Architecture
+# AGZ Memory v9 Architecture
 
 ## System Boundaries
 
 ```text
 OpenCode V2 beta-18743
-  -> @vaur94/opencode2-memory-plugin
+  -> @vaur94/agz-memory-plugin
      -> projection -> redaction -> policy -> CaptureEventV1
      -> bounded retrieval -> untrusted context
-        -> @vaur94/opencode2-memory/core
+         -> @vaur94/agz-memory/core
            -> SQLite schema v9 (canonical)
               -> FTS5 + graph + revisions + provenance + outbox
                  -> optional replaceable derived backend (currently none)
 
 OpenCode MCP client
-  -> opencode2-memory stdio server
+  -> agz-memory stdio server
      -> unchanged nine-tool MCP adapter
         -> same core and canonical SQLite database
 ```

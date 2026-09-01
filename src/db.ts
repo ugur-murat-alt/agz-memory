@@ -114,7 +114,7 @@ export function openMemoryDatabase(path: string): OpenedDB {
       }
       assertHealthyDatabase(db);
       console.warn(
-        `[opencode2-memory] migrated to v${SCHEMA_VERSION} (backup: ${backup.manifestPath})`,
+        `[agz-memory] migrated to v${SCHEMA_VERSION} (backup: ${backup.manifestPath})`,
       );
       lock.release();
       lock = undefined;
@@ -473,7 +473,7 @@ function migrateFromV2Data(
   migratedEdges += importLegacyAssociations(db);
 
   console.warn(
-    `[opencode2-memory] v2→v3 migration complete: ${migratedNotes} notes, ${migratedEdges} edges (backup: ${backup})`,
+    `[agz-memory] v2→v3 migration complete: ${migratedNotes} notes, ${migratedEdges} edges (backup: ${backup})`,
   );
 }
 

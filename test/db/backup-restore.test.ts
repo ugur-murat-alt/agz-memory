@@ -11,7 +11,7 @@ import { runAdmin } from "../../src/admin";
 
 describe("backup, restore, and migration lock", () => {
   test("verifies a backup and restores it without overwriting the previous database", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-restore-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-restore-"));
     const path = join(directory, "memory.sqlite");
     const opened = openMemoryDatabase(path);
     const store = new MemoryStore(opened.db);
@@ -39,7 +39,7 @@ describe("backup, restore, and migration lock", () => {
   });
 
   test("keeps the live database intact when an active reader blocks the WAL checkpoint", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-restore-busy-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-restore-busy-"));
     const path = join(directory, "memory.sqlite");
     const opened = openMemoryDatabase(path);
     const store = new MemoryStore(opened.db);
@@ -75,7 +75,7 @@ describe("backup, restore, and migration lock", () => {
   });
 
   test("restores a verified backup over an unhealthy target and preserves the corrupt source", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-restore-corrupt-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-restore-corrupt-"));
     const path = join(directory, "memory.sqlite");
     const opened = openMemoryDatabase(path);
     const store = new MemoryStore(opened.db);
@@ -98,7 +98,7 @@ describe("backup, restore, and migration lock", () => {
   });
 
   test("rejects escaped backup files and binds prune confirmation to manifest contents", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-prune-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-prune-"));
     const path = join(directory, "memory.sqlite");
     const opened = openMemoryDatabase(path);
     new MemoryStore(opened.db).createProject("Prune");
@@ -159,7 +159,7 @@ describe("backup, restore, and migration lock", () => {
   });
 
   test("serializes live migration owners and only breaks a verified stale owner", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-lock-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-lock-"));
     const path = join(directory, "memory.sqlite");
     const db = new Database(path, { create: true });
     db.close();
@@ -180,7 +180,7 @@ describe("backup, restore, and migration lock", () => {
   });
 
   test("does not publish a migration lock when its owner record cannot be staged", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-lock-write-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-lock-write-"));
     const path = join(directory, "memory.sqlite");
     chmodSync(directory, 0o500);
     try {

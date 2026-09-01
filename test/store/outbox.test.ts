@@ -15,7 +15,7 @@ import { OutboxWorker } from "../../src/store/outbox";
 
 describe("outbox worker", () => {
   test("delivers project FIFO operations idempotently and leaves canonical writes committed", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-outbox-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-outbox-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     const backend = new FakeBackend();
     const store = new MemoryStore(opened.db, [backend.id]);

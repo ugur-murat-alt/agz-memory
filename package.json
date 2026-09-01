@@ -1,7 +1,7 @@
 {
-  "name": "@vaur94/opencode2-memory",
+  "name": "@vaur94/agz-memory",
   "version": "0.4.0-beta.1",
-  "description": "Persistent linked memory MCP server for OpenCode V2",
+  "description": "Project-scoped persistent linked memory MCP server for OpenCode V2",
   "type": "module",
   "main": "./dist/server.js",
   "exports": {
@@ -12,10 +12,12 @@
     }
   },
   "bin": {
-    "opencode2-memory": "dist/server.js",
-    "opencode2-memory-admin": "dist/admin.js"
+    "agz-memory": "dist/server.js",
+    "agz-memory-admin": "dist/admin.js"
   },
   "files": [
+    "README.md",
+    "README.tr.md",
     "dist/server.js",
     "dist/core.js",
     "dist/admin.js",
@@ -38,6 +40,14 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ugur-murat-alt/agz-memory.git"
+  },
+  "homepage": "https://github.com/ugur-murat-alt/agz-memory#readme",
+  "bugs": {
+    "url": "https://github.com/ugur-murat-alt/agz-memory/issues"
   },
   "license": "MIT",
   "devDependencies": {

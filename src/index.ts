@@ -16,7 +16,7 @@ function main(): void {
   const opened = openMemoryDatabase(databasePath);
   const store = new MemoryStore(opened.db);
   const handle = serveStdio(() => createMemoryServer(store), {
-    onerror: (error) => console.error(`[opencode2-memory] ${error.message}`),
+    onerror: (error) => console.error(`[agz-memory] ${error.message}`),
   });
 
   let closing = false;
@@ -39,7 +39,7 @@ try {
   main();
 } catch (error) {
   console.error(
-    `[opencode2-memory] failed to start: ${error instanceof Error ? error.message : String(error)}`,
+    `[agz-memory] failed to start: ${error instanceof Error ? error.message : String(error)}`,
   );
   process.exitCode = 1;
 }

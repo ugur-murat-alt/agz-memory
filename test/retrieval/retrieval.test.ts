@@ -10,7 +10,7 @@ import type { RetrievalBackend } from "../../src/retrieval/contract";
 
 describe("hybrid retrieval", () => {
   test("keeps active project filtering and rejects stale or cross-project backend hits", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-retrieval-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-retrieval-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     const memory = new MemoryStore(opened.db);
     const alpha = memory.createProject("Alpha").project!.projectID;

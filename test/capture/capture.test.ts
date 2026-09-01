@@ -65,7 +65,7 @@ describe("capture safety core", () => {
   });
 
   test("stores one event per native identity, quarantines private keys, and materializes explicit memory", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-capture-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-capture-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     const memory = new MemoryStore(opened.db, ["fake@1"]);
     const projectID = memory.createProject("Capture").project!.projectID;
@@ -104,7 +104,7 @@ describe("capture safety core", () => {
   });
 
   test("atomically supersedes only an explicit matching target", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-supersede-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-supersede-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     const memory = new MemoryStore(opened.db);
     const projectID = memory.createProject("Supersede").project!.projectID;

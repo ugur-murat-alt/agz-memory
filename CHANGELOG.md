@@ -3,7 +3,7 @@
 ## 0.4.0-beta.1 - 2026-08-31
 
 - Added verified backup manifests, migration locking, schema v9, restore, and
-  the `opencode2-memory-admin` binary.
+  the `agz-memory-admin` binary.
 - Added note revisions, provenance, trigger-maintained FTS5, supersession, and
   payload-free derived-index outbox processing.
 - Added strict `CaptureEventV1`, deterministic idempotency, double redaction,
@@ -14,3 +14,5 @@
   default and staged rollout modes.
 - Preserved all nine MCP tool names, selectors, result envelopes, project
   isolation, and destructive confirmations.
+- Renamed the public repository, packages, binaries, MCP server, and plugin to
+  AGZ Memory while retaining legacy persisted contract identifiers.

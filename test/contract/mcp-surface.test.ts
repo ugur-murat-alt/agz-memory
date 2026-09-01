@@ -16,7 +16,7 @@ afterEach(async () => {
 
 describe("MCP compatibility surface", () => {
   test("keeps initialize identity, instructions, and exact tool catalog stable", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-contract-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-contract-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     const server = createMemoryServer(new MemoryStore(opened.db));
     const client = new Client({ name: "contract-test", version: "1" });
@@ -30,7 +30,7 @@ describe("MCP compatibility surface", () => {
       rmSync(directory, { recursive: true, force: true });
     });
 
-    expect(client.getServerVersion()).toEqual({ name: "opencode2-memory", version: "0.4.0-beta.1" });
+    expect(client.getServerVersion()).toEqual({ name: "agz-memory", version: "0.4.0-beta.1" });
     expect(client.getInstructions()).toBe(MEMORY_GUIDANCE);
     const { tools } = await client.listTools();
     expect(
@@ -47,7 +47,7 @@ describe("MCP compatibility surface", () => {
   });
 
   test("preserves ordered non-atomic batch completion", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-batch-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-batch-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     const store = new MemoryStore(opened.db);
     const projectID = store.createProject("Batch").project!.projectID;

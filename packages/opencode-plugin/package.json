@@ -1,5 +1,5 @@
 {
-  "name": "@vaur94/opencode2-memory-plugin",
+  "name": "@vaur94/agz-memory-plugin",
   "version": "0.4.0-beta.1",
   "description": "Safe automatic memory capture and bounded context injection for OpenCode V2",
   "type": "module",
@@ -22,9 +22,21 @@
   "engines": {
     "bun": ">=1.3.14"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ugur-murat-alt/agz-memory.git",
+    "directory": "packages/opencode-plugin"
+  },
+  "homepage": "https://github.com/ugur-murat-alt/agz-memory#readme",
+  "bugs": {
+    "url": "https://github.com/ugur-murat-alt/agz-memory/issues"
+  },
   "dependencies": {
     "@opencode-ai/plugin": "0.0.0-beta-18743",
-    "@vaur94/opencode2-memory": "0.4.0-beta.1"
+    "@vaur94/agz-memory": "0.4.0-beta.1"
   }
 }

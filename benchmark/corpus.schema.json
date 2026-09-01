@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "opencode2-memory redacted retrieval corpus record",
+  "title": "AGZ Memory redacted retrieval corpus record",
   "type": "object",
   "additionalProperties": false,
   "required": ["projectID", "query", "goldNoteIDs", "abstain", "questionType"],

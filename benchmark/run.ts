@@ -12,7 +12,7 @@ if (!Number.isInteger(queryCount) || queryCount < 1 || queryCount > 1_000) {
   throw new Error("query count must be 1..1000");
 }
 
-const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-benchmark-"));
+const directory = mkdtempSync(join(tmpdir(), "agz-memory-benchmark-"));
 const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
 const projectID = "11111111-1111-4111-8111-111111111111";
 const now = Date.now();
@@ -54,7 +54,7 @@ const percentile = (value: number) => samples[Math.min(samples.length - 1, Math.
 process.stdout.write(
   `${JSON.stringify(
     {
-      schema: "opencode2-memory.benchmark/1",
+      schema: "agz-memory.benchmark/1",
       records: size,
       queries: queryCount,
       latencyMs: {

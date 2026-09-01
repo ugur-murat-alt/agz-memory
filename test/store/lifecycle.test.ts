@@ -7,7 +7,7 @@ import { MemoryStore } from "../../src/store";
 
 describe("note lifecycle", () => {
   test("records idempotent revisions and durable derived-index outbox operations", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-lifecycle-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-lifecycle-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     const store = new MemoryStore(opened.db, ["fake@1"]);
     const projectID = store.createProject("Lifecycle").project!.projectID;

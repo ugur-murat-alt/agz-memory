@@ -1,6 +1,6 @@
 import { realpathSync } from "fs";
 import type { Plugin } from "@opencode-ai/plugin";
-import type { MemoryCore } from "@vaur94/opencode2-memory/core";
+import type { MemoryCore } from "@vaur94/agz-memory/core";
 import type { MemoryPluginOptions } from "./config";
 
 export interface ActiveBinding {

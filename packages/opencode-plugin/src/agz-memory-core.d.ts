@@ -1,6 +1,6 @@
 type CoreModule = typeof import("../../../dist/types/core");
 
-declare module "@vaur94/opencode2-memory/core" {
+declare module "@vaur94/agz-memory/core" {
   export const CAPTURE_SCHEMA: CoreModule["CAPTURE_SCHEMA"];
   export const REDACTION_POLICY_VERSION: CoreModule["REDACTION_POLICY_VERSION"];
   export const SUPPORTED_OPENCODE_VERSION: CoreModule["SUPPORTED_OPENCODE_VERSION"];

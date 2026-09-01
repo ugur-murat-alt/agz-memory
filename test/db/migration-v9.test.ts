@@ -9,7 +9,7 @@ import { noteContentHash } from "../../src/db/migrations/v009";
 
 describe("schema v9 migration", () => {
   test("preserves v8 rows and creates revision, provenance, FTS triggers, and backup", () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-v8-v9-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-v8-v9-"));
     const path = join(directory, "memory.sqlite");
     createV8Database(path);
 

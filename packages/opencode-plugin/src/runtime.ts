@@ -10,7 +10,7 @@ import {
   type CaptureEventV1,
   type MemoryCore,
   type MemoryCandidateV1,
-} from "@vaur94/opencode2-memory/core";
+} from "@vaur94/agz-memory/core";
 import type { ActiveBinding } from "./binding";
 import { eventMatchesLocation, sessionMatchesBinding } from "./binding";
 import type { MemoryPluginOptions } from "./config";
@@ -391,7 +391,7 @@ export class PluginRuntime {
   private log(operation: string, error: unknown): void {
     const errorCode = error instanceof Error ? safeErrorCode(error.message) : "unknown";
     process.stderr.write(
-      `${JSON.stringify({ component: "opencode2-memory-plugin", operation, outcome: "failed", error_code: errorCode })}\n`,
+      `${JSON.stringify({ component: "agz-memory-plugin", operation, outcome: "failed", error_code: errorCode })}\n`,
     );
   }
 }

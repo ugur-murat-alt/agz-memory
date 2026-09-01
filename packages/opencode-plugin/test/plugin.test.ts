@@ -6,13 +6,14 @@ import type { Plugin } from "@opencode-ai/plugin";
 import * as coreModule from "../../../src/core";
 import { parseOptions, SAFE_DEFAULTS } from "../src/config";
 
-mock.module("@vaur94/opencode2-memory/core", () => coreModule);
+mock.module("@vaur94/agz-memory/core", () => coreModule);
 const { PluginRuntime } = await import("../src/runtime");
 const memoryPlugin = (await import("../src/index")).default;
 const { openMemoryCore } = coreModule;
 
 describe("OpenCode V2 memory plugin", () => {
   test("uses strict safe defaults and refuses unproven semantic backends", () => {
+    expect(memoryPlugin.id).toBe("agz-memory");
     expect(parseOptions({})).toEqual(SAFE_DEFAULTS);
     expect(() => parseOptions({ unknown: true })).toThrow("unknown field");
     expect(() =>
@@ -22,7 +23,7 @@ describe("OpenCode V2 memory plugin", () => {
   });
 
   test("disposes partial hook registration when setup fails", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-plugin-partial-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-partial-"));
     const databasePath = join(directory, "memory.sqlite");
     const core = openMemoryCore(databasePath);
     const projectID = core.memory.createProject("Plugin Partial").project!.projectID;
@@ -56,7 +57,7 @@ describe("OpenCode V2 memory plugin", () => {
   });
 
   test("deduplicates prompt retries in shadow capture", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-plugin-capture-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-capture-"));
     const databasePath = join(directory, "memory.sqlite");
     const core = openMemoryCore(databasePath);
     const projectID = core.memory.createProject("Plugin Capture").project!.projectID;
@@ -112,7 +113,7 @@ describe("OpenCode V2 memory plugin", () => {
   });
 
   test("reruns reconciliation when another terminal event arrives in flight", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-plugin-reconcile-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-reconcile-"));
     const databasePath = join(directory, "memory.sqlite");
     const core = openMemoryCore(databasePath);
     const projectID = core.memory.createProject("Plugin Reconcile").project!.projectID;
@@ -207,7 +208,7 @@ describe("OpenCode V2 memory plugin", () => {
   });
 
   test("injects one bounded untrusted block and never persists it", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "opencode2-memory-plugin-inject-"));
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-inject-"));
     const databasePath = join(directory, "memory.sqlite");
     const core = openMemoryCore(databasePath);
     const projectID = core.memory.createProject("Plugin Inject").project!.projectID;
