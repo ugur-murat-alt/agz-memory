@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, symlinkSync } from "fs";
+import { tmpdir } from "os";
 import { dirname, join, resolve } from "path";
 
 const root = resolve(import.meta.dir, "..");
@@ -35,8 +36,11 @@ if (existsSync(packageLink)) {
 }
 
 try {
+  const testEnvironment = { ...process.env };
+  if (process.platform === "darwin") testEnvironment.TMPDIR = realpathSync(tmpdir());
   const result = Bun.spawnSync(["bun", "test", ...process.argv.slice(2)], {
     cwd: root,
+    env: testEnvironment,
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
