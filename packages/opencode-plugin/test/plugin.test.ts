@@ -111,7 +111,8 @@ describe("OpenCode V2 memory plugin", () => {
       await cleanup?.();
       const check = openMemoryCore(databasePath);
       const checkpoint = check.capture.getCheckpoint("session-1");
-      expect(checkpoint?.lastMessageID).toBe("message-1");
+      expect(checkpoint).toMatchObject({ sessionID: "session-1", state: "active" });
+      expect(checkpoint?.lastMessageID).toBeUndefined();
       check.close();
       const sqlite = new Database(databasePath, { readonly: true });
       expect(
@@ -121,6 +122,209 @@ describe("OpenCode V2 memory plugin", () => {
     } finally {
       if (previous === undefined) delete process.env.OPENCODE_MEMORY_DATABASE_PATH;
       else process.env.OPENCODE_MEMORY_DATABASE_PATH = previous;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("advances the prompt checkpoint only after capture ingestion succeeds", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-checkpoint-"));
+    const databasePath = join(directory, "memory.sqlite");
+    const core = openMemoryCore(databasePath);
+    const projectID = core.memory.createProject("Plugin Checkpoint").project!.projectID;
+    const persisted = core.capture.bindProject({
+      memoryProjectID: projectID,
+      opencodeProjectID: "oc-project",
+      canonicalDirectory: directory,
+      workspaceID: "",
+    });
+    const originalIngest = core.capture.ingest.bind(core.capture);
+    let failIngest = true;
+    core.capture.ingest = ((event, mode, policy) => {
+      if (failIngest) throw new Error("injected capture failure");
+      return originalIngest(event, mode, policy);
+    }) as typeof core.capture.ingest;
+    const harness = fakeContext(directory, {});
+    const runtime = new PluginRuntime(
+      harness.context,
+      core as unknown as ConstructorParameters<typeof PluginRuntime>[1],
+      parseOptions({
+        mode: "shadow-capture",
+        autoCreateProjects: false,
+        bindings: [{ memoryProjectID: projectID, opencodeProjectID: "oc-project" }],
+        capture: { enabled: true, allowedKinds: ["preference"], minConfidence: 0.95 },
+        retrieval: {
+          semanticBackend: "none",
+          timeoutMs: 300,
+          maxCards: 8,
+          maxCharacters: 4_800,
+        },
+      }),
+      {
+        bindingKey: persisted.bindingKey,
+        projectID,
+        directory,
+        workspaceID: "",
+        opencodeProjectID: "oc-project",
+      },
+    );
+    try {
+      await runtime.start();
+      const prompt = harness.sessionHooks.get("prompt")!;
+      const input = {
+        sessionID: "session-1",
+        messageID: "message-1",
+        prompt: { text: "Tercihim: kısa yanıt ver." },
+      };
+      await prompt(input);
+      expect(core.capture.getCheckpoint("session-1", persisted.bindingKey, projectID)).toBeUndefined();
+
+      failIngest = false;
+      await prompt(input);
+      const checkpoint = core.capture.getCheckpoint("session-1", persisted.bindingKey, projectID);
+      expect(checkpoint).toMatchObject({ sessionID: "session-1", state: "active" });
+      expect(checkpoint?.lastMessageID).toBeUndefined();
+      const sqlite = new Database(databasePath, { readonly: true });
+      expect(
+        (sqlite.query("SELECT COUNT(*) AS count FROM capture_events").get() as { count: number }).count,
+      ).toBe(1);
+      sqlite.close();
+    } finally {
+      await runtime.stop();
+      core.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a missed assistant message recoverable after the next prompt", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-watermark-"));
+    const databasePath = join(directory, "memory.sqlite");
+    const core = openMemoryCore(databasePath);
+    const projectID = core.memory.createProject("Plugin Watermark").project!.projectID;
+    const persisted = core.capture.bindProject({
+      memoryProjectID: projectID,
+      opencodeProjectID: "oc-project",
+      canonicalDirectory: directory,
+      workspaceID: "",
+    });
+    const history = [
+      {
+        type: "assistant",
+        id: "assistant-missed",
+        content: [{ type: "text", text: "Missed assistant outcome" }],
+      },
+      { type: "user", id: "message-next", text: "Tercihim: kısa yanıt ver." },
+    ];
+    const harness = fakeContext(directory, {}, undefined, undefined, history);
+    const runtime = new PluginRuntime(
+      harness.context,
+      core as unknown as ConstructorParameters<typeof PluginRuntime>[1],
+      parseOptions({
+        mode: "shadow-capture",
+        autoCreateProjects: false,
+        bindings: [{ memoryProjectID: projectID, opencodeProjectID: "oc-project" }],
+        capture: { enabled: true, allowedKinds: ["preference"], minConfidence: 0.95 },
+        retrieval: {
+          semanticBackend: "none",
+          timeoutMs: 300,
+          maxCards: 8,
+          maxCharacters: 4_800,
+        },
+      }),
+      {
+        bindingKey: persisted.bindingKey,
+        projectID,
+        directory,
+        workspaceID: "",
+        opencodeProjectID: "oc-project",
+      },
+    );
+    try {
+      await runtime.start();
+      await harness.sessionHooks.get("prompt")!({
+        sessionID: "session-1",
+        messageID: "message-next",
+        prompt: { text: "Tercihim: kısa yanıt ver." },
+      });
+      expect(
+        core.capture.getCheckpoint("session-1", persisted.bindingKey, projectID)?.lastMessageID,
+      ).toBeUndefined();
+
+      const internal = runtime as unknown as { reconcile(sessionID: string): Promise<void> };
+      await internal.reconcile("session-1");
+      const sqlite = new Database(databasePath, { readonly: true });
+      const sourceIDs = (
+        sqlite.query("SELECT source_message_id FROM capture_events ORDER BY source_message_id").all() as Array<{
+          source_message_id: string;
+        }>
+      ).map((row) => row.source_message_id);
+      sqlite.close();
+      expect(sourceIDs).toEqual(["assistant-missed", "message-next"]);
+      expect(
+        core.capture.getCheckpoint("session-1", persisted.bindingKey, projectID)?.lastMessageID,
+      ).toBe("message-next");
+    } finally {
+      await runtime.stop();
+      core.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects same-location events from a different OpenCode project", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-event-project-"));
+    const databasePath = join(directory, "memory.sqlite");
+    const core = openMemoryCore(databasePath);
+    const projectID = core.memory.createProject("Plugin Event Project").project!.projectID;
+    const persisted = core.capture.bindProject({
+      memoryProjectID: projectID,
+      opencodeProjectID: "oc-project",
+      canonicalDirectory: directory,
+      workspaceID: "",
+    });
+    const harness = fakeContext(directory, {});
+    const runtime = new PluginRuntime(
+      harness.context,
+      core as unknown as ConstructorParameters<typeof PluginRuntime>[1],
+      parseOptions({
+        mode: "shadow-capture",
+        autoCreateProjects: false,
+        bindings: [{ memoryProjectID: projectID, opencodeProjectID: "oc-project" }],
+        capture: { enabled: true, allowedKinds: ["fact"], minConfidence: 0.7 },
+        retrieval: {
+          semanticBackend: "none",
+          timeoutMs: 300,
+          maxCards: 8,
+          maxCharacters: 4_800,
+        },
+      }),
+      {
+        bindingKey: persisted.bindingKey,
+        projectID,
+        directory,
+        workspaceID: "",
+        opencodeProjectID: "oc-project",
+      },
+    );
+    try {
+      await runtime.start();
+      const internal = runtime as unknown as { handleEvent(event: unknown): Promise<void> };
+      await internal.handleEvent({
+        type: "session.text.ended",
+        location: { directory, workspaceID: "" },
+        data: {
+          sessionID: "other-session",
+          assistantMessageID: "assistant-foreign",
+          text: "Foreign project outcome",
+          ordinal: 0,
+        },
+      });
+      const sqlite = new Database(databasePath, { readonly: true });
+      expect(
+        (sqlite.query("SELECT COUNT(*) AS count FROM capture_events").get() as { count: number }).count,
+      ).toBe(0);
+      sqlite.close();
+    } finally {
+      await runtime.stop();
+      core.close();
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -213,6 +417,159 @@ describe("OpenCode V2 memory plugin", () => {
       queue("boundary-session");
       await boundaryRerun;
       expect(boundaryCalls).toBe(2);
+    } finally {
+      await runtime.stop();
+      core.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("releases reconciliation capacity when context calls never settle", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-reconcile-timeout-"));
+    const databasePath = join(directory, "memory.sqlite");
+    const core = openMemoryCore(databasePath);
+    const projectID = core.memory.createProject("Plugin Reconcile Timeout").project!.projectID;
+    const persisted = core.capture.bindProject({
+      memoryProjectID: projectID,
+      opencodeProjectID: "oc-project",
+      canonicalDirectory: directory,
+      workspaceID: "",
+    });
+    let enterFifth!: () => void;
+    const fifthEntered = new Promise<void>((resolve) => { enterFifth = resolve; });
+    const never = new Promise<never>(() => {});
+    let active = 0;
+    let peak = 0;
+    const trackHang = (requestOptions?: { signal?: AbortSignal }) => {
+      active++;
+      peak = Math.max(peak, active);
+      return Promise.race([
+        never,
+        new Promise<never>((_resolve, reject) => {
+          requestOptions?.signal?.addEventListener("abort", () => {
+            active--;
+            reject(new Error("aborted"));
+          }, { once: true });
+        }),
+      ]);
+    };
+    const harness = fakeContext(directory, {}, undefined, (call, requestOptions) => {
+      if (call <= 2) return trackHang(requestOptions);
+      enterFifth();
+    }, [], (call, requestOptions) => {
+      if (call <= 2) return trackHang(requestOptions);
+    });
+    const runtime = new PluginRuntime(
+      harness.context,
+      core as unknown as ConstructorParameters<typeof PluginRuntime>[1],
+      parseOptions({
+        mode: "shadow-capture",
+        autoCreateProjects: false,
+        bindings: [{ memoryProjectID: projectID, opencodeProjectID: "oc-project" }],
+        capture: { enabled: true, allowedKinds: ["preference"], minConfidence: 0.95 },
+        retrieval: {
+          semanticBackend: "none",
+          timeoutMs: 10,
+          maxCards: 8,
+          maxCharacters: 4_800,
+        },
+      }),
+      {
+        bindingKey: persisted.bindingKey,
+        projectID,
+        directory,
+        workspaceID: "",
+        opencodeProjectID: "oc-project",
+      },
+    );
+    try {
+      await runtime.start();
+      const internal = runtime as unknown as {
+        queueReconcile(sessionID: string): void;
+        reconcileTasks: Set<Promise<void>>;
+      };
+      for (let index = 1; index <= 5; index++) {
+        internal.queueReconcile(`session-${index}`);
+      }
+      await Promise.race([
+        fifthEntered,
+        Bun.sleep(1_000).then(() => { throw new Error("fifth reconciliation was starved"); }),
+      ]);
+      await Promise.allSettled([...internal.reconcileTasks]);
+      expect(harness.sessionGetCallCount()).toBe(5);
+      expect(harness.contextCallCount()).toBe(3);
+      expect(peak).toBeLessThanOrEqual(4);
+      expect(active).toBe(0);
+    } finally {
+      await runtime.stop();
+      core.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("bounds and aborts terminal-event binding and opt-out probes", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-event-timeout-"));
+    const databasePath = join(directory, "memory.sqlite");
+    const core = openMemoryCore(databasePath);
+    const projectID = core.memory.createProject("Plugin Event Timeout").project!.projectID;
+    const persisted = core.capture.bindProject({
+      memoryProjectID: projectID,
+      opencodeProjectID: "oc-project",
+      canonicalDirectory: directory,
+      workspaceID: "",
+    });
+    const aborted: string[] = [];
+    const hang = (operation: string, requestOptions?: { signal?: AbortSignal }) =>
+      new Promise<never>((_resolve, reject) => {
+        requestOptions?.signal?.addEventListener("abort", () => {
+          aborted.push(operation);
+          reject(new Error("aborted"));
+        }, { once: true });
+      });
+    const harness = fakeContext(
+      directory,
+      {},
+      undefined,
+      (_call, requestOptions) => hang("context", requestOptions),
+      [],
+      (call, requestOptions) => call === 1 ? hang("get", requestOptions) : undefined,
+    );
+    const runtime = new PluginRuntime(
+      harness.context,
+      core as unknown as ConstructorParameters<typeof PluginRuntime>[1],
+      parseOptions({
+        mode: "shadow-capture",
+        autoCreateProjects: false,
+        bindings: [{ memoryProjectID: projectID, opencodeProjectID: "oc-project" }],
+        capture: { enabled: true, allowedKinds: ["preference"], minConfidence: 0.95 },
+        retrieval: {
+          semanticBackend: "none",
+          timeoutMs: 10,
+          maxCards: 8,
+          maxCharacters: 4_800,
+        },
+      }),
+      {
+        bindingKey: persisted.bindingKey,
+        projectID,
+        directory,
+        workspaceID: "",
+        opencodeProjectID: "oc-project",
+      },
+    );
+    try {
+      await runtime.start();
+      const internal = runtime as unknown as { handleEvent(event: unknown): Promise<void> };
+      await expect(internal.handleEvent({
+        type: "session.idle",
+        data: { sessionID: "binding-timeout" },
+      })).rejects.toThrow("timeout");
+      await expect(internal.handleEvent({
+        type: "session.idle",
+        location: { directory, workspaceID: "" },
+        data: { sessionID: "optout-timeout" },
+      })).rejects.toThrow("timeout");
+      expect(aborted).toEqual(["get", "context"]);
     } finally {
       await runtime.stop();
       core.close();
@@ -480,12 +837,20 @@ function fakeContext(
   directory: string,
   options: Record<string, unknown>,
   failHook?: string,
-  onContext?: (call: number) => Promise<void> | void,
+  onContext?: (
+    call: number,
+    requestOptions?: { signal?: AbortSignal },
+  ) => Promise<void> | void,
   contextMessages: unknown[] = [],
+  onGet?: (
+    call: number,
+    requestOptions?: { signal?: AbortSignal },
+  ) => Promise<void> | void,
 ) {
   const sessionHooks = new Map<string, (input: unknown) => Promise<void> | void>();
   const toolHooks = new Map<string, (input: unknown) => Promise<void> | void>();
   let contextCalls = 0;
+  let sessionGetCalls = 0;
   const context = {
     app: { name: "opencode2", version: "0.0.0-beta-18743", channel: "beta" },
     location: {
@@ -499,7 +864,9 @@ function fakeContext(
         sessionHooks.set(name, callback);
         return { async dispose() { sessionHooks.delete(name); } };
       },
-      async get(input: { sessionID: string }) {
+      async get(input: { sessionID: string }, requestOptions?: { signal?: AbortSignal }) {
+        sessionGetCalls++;
+        await onGet?.(sessionGetCalls, requestOptions);
         return {
           id: input.sessionID,
           projectID: input.sessionID === "other-session" ? "other-project" : "oc-project",
@@ -509,9 +876,9 @@ function fakeContext(
           location: { directory },
         };
       },
-      async context() {
+      async context(_input: unknown, requestOptions?: { signal?: AbortSignal }) {
         contextCalls++;
-        await onContext?.(contextCalls);
+        await onContext?.(contextCalls, requestOptions);
         return contextMessages;
       },
     },
@@ -531,5 +898,11 @@ function fakeContext(
       },
     },
   } as unknown as Plugin.Context;
-  return { context, sessionHooks, toolHooks, contextCallCount: () => contextCalls };
+  return {
+    context,
+    sessionHooks,
+    toolHooks,
+    contextCallCount: () => contextCalls,
+    sessionGetCallCount: () => sessionGetCalls,
+  };
 }

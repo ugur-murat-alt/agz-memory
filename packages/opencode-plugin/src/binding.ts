@@ -62,8 +62,9 @@ export async function sessionMatchesBinding(
   ctx: Plugin.Context,
   sessionID: string,
   binding: ActiveBinding,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  const session = await ctx.session.get({ sessionID });
+  const session = await ctx.session.get({ sessionID }, { signal });
   return (
     String(session.projectID) === binding.opencodeProjectID &&
     canonical(String(session.location.directory)) === binding.directory &&
