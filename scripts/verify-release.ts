@@ -52,14 +52,14 @@ export function collectReleaseFiles(root: string): Map<string, string> {
   const files = new Map<string, string>();
   for (const path of new TextDecoder().decode(result.stdout).split("\0").filter(Boolean)) {
     if (/\.(?:gif|jpe?g|png|webp|ico|pdf)$/i.test(path) || path === "LICENSE") continue;
-    files.set(path, readFileSync(resolve(root, path), "utf8"));
+    files.set(path, normalizeText(readFileSync(resolve(root, path), "utf8")));
   }
   return files;
 }
 
 export function validateReleaseFiles(files: ReadonlyMap<string, string>): string[] {
   files = new Map(
-    [...files].map(([path, content]) => [path, content.replace(/\r\n?/g, "\n")]),
+    [...files].map(([path, content]) => [path, normalizeText(content)]),
   );
   const errors: string[] = [];
   const required = [
@@ -164,6 +164,10 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
     errors.push("plugin package files must include README.tr.md");
   }
   return errors;
+}
+
+function normalizeText(content: string): string {
+  return content.replace(/\r\n?/g, "\n");
 }
 
 function validateCI(files: ReadonlyMap<string, string>, errors: string[]): void {

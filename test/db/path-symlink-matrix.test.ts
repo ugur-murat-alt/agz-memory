@@ -45,6 +45,22 @@ describe("database path symlink policy", () => {
     }
   });
 
+  test("rejects a symlink in an intermediate database directory", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-parent-symlink-"));
+    const realParent = join(directory, "real-parent");
+    const linkedParent = join(directory, "linked-parent");
+    mkdirSync(realParent);
+    symlinkSync(realParent, linkedParent, "dir");
+
+    try {
+      expect(() => openMemoryDatabase(join(linkedParent, "memory.sqlite"))).toThrow(
+        /symbolic|symlink/i,
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("rejects a directory masquerading as a SQLite sidecar without deleting it", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-sidecar-directory-"));
     const databasePath = join(directory, "memory.sqlite");

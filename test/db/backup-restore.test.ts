@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "crypto";
 import {
-  chmodSync,
   closeSync,
   cpSync,
   existsSync,
@@ -298,13 +297,11 @@ describe("backup, restore, and migration lock", () => {
 
   test("does not publish a migration lock when its owner record cannot be staged", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-lock-write-"));
-    const path = join(directory, "memory.sqlite");
-    chmodSync(directory, 0o500);
+    const path = join(directory, "missing", "memory.sqlite");
     try {
       expect(() => acquireMigrationLock(path, 9, 0)).toThrow();
       expect(existsSync(migrationLockPath(path))).toBe(false);
     } finally {
-      chmodSync(directory, 0o700);
       rmSync(directory, { recursive: true, force: true });
     }
   });

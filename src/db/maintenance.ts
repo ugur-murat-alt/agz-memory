@@ -9,6 +9,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
   renameSync,
   rmdirSync,
@@ -206,7 +207,13 @@ export function assertNoSymbolicLinks(path: string, allowMissingLeaf = false): v
     current = join(current, parts[index]!);
     try {
       const stat = lstatSync(current);
-      if (stat.isSymbolicLink()) throw new Error(`symbolic links are not allowed: ${current}`);
+      if (stat.isSymbolicLink()) {
+        const trustedDarwinVarAlias =
+          platform() === "darwin" &&
+          current === "/var" &&
+          resolve(dirname(current), readlinkSync(current)) === "/private/var";
+        if (!trustedDarwinVarAlias) throw new Error(`symbolic links are not allowed: ${current}`);
+      }
     } catch (error) {
       if (isMissing(error) && (allowMissingLeaf ? index === parts.length - 1 : true)) return;
       throw error;

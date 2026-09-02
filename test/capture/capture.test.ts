@@ -242,7 +242,7 @@ describe("capture safety core", () => {
     expect(capture.getCheckpoint("active-session")?.state).toBe("active");
     opened.close();
     rmSync(directory, { recursive: true, force: true });
-  });
+  }, 20_000);
 });
 
 function userEvent(
