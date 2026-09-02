@@ -1,0 +1,2 @@
+$ bun scripts/verify-release.ts
+release surface verified

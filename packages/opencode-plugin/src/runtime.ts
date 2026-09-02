@@ -21,15 +21,28 @@ type OpenCodeEvent = ReturnType<Plugin.Context["event"]["subscribe"]> extends As
   ? Event
   : never;
 
+interface TurnState {
+  messageID?: string;
+  optedOut: boolean;
+  source: "prompt" | "history";
+}
+
+const MAX_RECONCILE_CONCURRENCY = 4;
+
 export class PluginRuntime {
   private abort = new AbortController();
   private registrations: Array<{ dispose(): Promise<void> }> = [];
   private promptCache = new Map<string, { text: string; expiresAt: number }>();
-  private optedOutSessions = new Set<string>();
-  private observedSessions = new Set<string>();
+  private turnStates = new Map<string, TurnState>();
+  private promptGenerations = new Map<string, number>();
+  private nextPromptGeneration = 0;
+  private optOutProbes = new Map<string, Promise<boolean>>();
   private reconcileQueue = new Set<string>();
+  private reconcilePending = new Set<string>();
   private reconcileAgain = new Set<string>();
   private reconcileTasks = new Set<Promise<void>>();
+  private reconcileActive = 0;
+  private reconcileDispatchScheduled = false;
   private eventLoop?: Promise<void>;
   private retentionTimer?: ReturnType<typeof setInterval>;
 
@@ -56,30 +69,59 @@ export class PluginRuntime {
           if (this.abort.signal.aborted) return;
           try {
             const sessionID = String(input.sessionID);
-            if (!(await sessionMatchesBinding(this.ctx, sessionID, this.binding))) return;
-            this.observedSessions.add(sessionID);
-            if (/\[memory:off\]/i.test(input.prompt.text)) {
+            const generation = ++this.nextPromptGeneration;
+            this.promptGenerations.set(sessionID, generation);
+            const optedOut = /\[memory:off\]/i.test(input.prompt.text);
+            if (optedOut) {
+              this.turnStates.set(sessionID, {
+                messageID: String(input.messageID),
+                optedOut: true,
+                source: "prompt",
+              });
               this.promptCache.delete(sessionID);
-              this.optedOutSessions.add(sessionID);
+            }
+            let matches: boolean;
+            try {
+              matches = await this.matchesBinding(sessionID);
+            } catch (error) {
+              this.discardPromptGeneration(sessionID, generation, true);
+              throw error;
+            }
+            if (!matches) {
+              this.discardPromptGeneration(sessionID, generation, false);
               return;
             }
-            this.optedOutSessions.delete(sessionID);
+            if (
+              this.abort.signal.aborted ||
+              this.promptGenerations.get(sessionID) !== generation
+            ) {
+              return;
+            }
+            this.turnStates.set(sessionID, {
+              messageID: String(input.messageID),
+              optedOut,
+              source: "prompt",
+            });
+            if (optedOut) {
+              this.promptCache.delete(sessionID);
+              return;
+            }
             this.cachePrompt(sessionID, input.prompt.text);
             if (!this.captureEnabled) return;
+            const safe = safeUserCandidate(input.prompt.text);
+            if (safe.candidate) {
+              this.ingestCandidate(
+                "user-candidate",
+                sessionID,
+                String(input.messageID),
+                safe.candidate,
+                safe.redaction,
+              );
+            }
             this.core.capture.checkpoint(
               sessionID,
               this.binding.bindingKey,
               this.binding.projectID,
-              String(input.messageID),
-            );
-            const safe = safeUserCandidate(input.prompt.text);
-            if (!safe.candidate) return;
-            this.ingestCandidate(
-              "user-candidate",
-              sessionID,
-              String(input.messageID),
-              safe.candidate,
-              safe.redaction,
             );
           } catch (error) {
             this.log("prompt", error);
@@ -92,17 +134,22 @@ export class PluginRuntime {
           const originalLength = input.system.length;
           try {
             const sessionID = String(input.sessionID);
-            if (!(await sessionMatchesBinding(this.ctx, sessionID, this.binding))) return;
-            if (!this.observedSessions.has(sessionID)) {
-              this.observedSessions.add(sessionID);
-              if (/\[memory:off\]/i.test(latestUserText(input.messages) ?? "")) {
-                this.optedOutSessions.add(sessionID);
-              }
+            if (!(await this.matchesBinding(sessionID))) return;
+            if (this.abort.signal.aborted) return;
+            const promptQuery = this.takePrompt(sessionID);
+            const previousTurn = this.turnStates.get(sessionID);
+            if (this.updateTurnFromMessages(sessionID, input.messages)) return;
+            if (
+              promptQuery === undefined &&
+              previousTurn !== undefined &&
+              this.turnStates.get(sessionID) === previousTurn
+            ) {
+              return;
             }
-            if (this.optedOutSessions.has(sessionID)) return;
-            const query = this.takePrompt(sessionID) ?? latestUserText(input.messages);
+            const query = promptQuery ?? latestUserText(input.messages);
             if (!query) return;
             const deadlineAt = Date.now() + this.options.retrieval.timeoutMs;
+            const retrievalTurn = this.turnStates.get(sessionID);
             const result = await this.core.retrieval.retrieve({
               projectID: this.binding.projectID,
               query,
@@ -110,6 +157,13 @@ export class PluginRuntime {
               deadlineAt,
               semantic: "off",
             });
+            if (this.abort.signal.aborted) return;
+            if (
+              this.turnStates.get(sessionID) !== retrievalTurn ||
+              retrievalTurn?.optedOut
+            ) {
+              return;
+            }
             if (this.options.mode === "shadow-retrieval") return;
             if (input.system.some((part) => part.text.includes("<agz-memory-context"))) return;
             const context = formatUntrustedContext(this.binding.projectID, result.cards, {
@@ -128,8 +182,10 @@ export class PluginRuntime {
           if (this.abort.signal.aborted || !this.captureEnabled) return;
           try {
             const sessionID = String(input.sessionID);
-            if (!(await sessionMatchesBinding(this.ctx, sessionID, this.binding))) return;
-            if (await this.turnOptedOut(sessionID)) return;
+            if (!(await this.matchesBinding(sessionID))) return;
+            if (this.abort.signal.aborted) return;
+            if (await this.turnOptedOut(sessionID, String(input.messageID))) return;
+            if (this.abort.signal.aborted) return;
             const signal = projectToolSignal(
               input.tool,
               input.status,
@@ -174,6 +230,7 @@ export class PluginRuntime {
       this.retentionTimer = undefined;
       await Promise.allSettled(this.registrations.splice(0).map((registration) => registration.dispose()));
       this.promptCache.clear();
+      this.promptGenerations.clear();
       throw error;
     }
   }
@@ -184,10 +241,12 @@ export class PluginRuntime {
     this.retentionTimer = undefined;
     await Promise.allSettled(this.registrations.splice(0).map((registration) => registration.dispose()));
     this.promptCache.clear();
-    this.optedOutSessions.clear();
-    this.observedSessions.clear();
-    if (this.eventLoop) await this.eventLoop;
-    await Promise.allSettled([...this.reconcileTasks]);
+    this.turnStates.clear();
+    this.promptGenerations.clear();
+    this.optOutProbes.clear();
+    this.reconcilePending.clear();
+    this.reconcileAgain.clear();
+    this.reconcileQueue.clear();
   }
 
   private async runEventLoop(): Promise<void> {
@@ -212,20 +271,28 @@ export class PluginRuntime {
   private async handleEvent(event: OpenCodeEvent): Promise<void> {
     if (!isSessionEvent(event)) return;
     const locationMatch = eventMatchesLocation(event.location, this.binding);
-    if (locationMatch === false) return;
-    if (locationMatch === undefined && !(await sessionMatchesBinding(this.ctx, event.data.sessionID, this.binding))) {
-      return;
-    }
     if (event.type === "session.deleted") {
       this.promptCache.delete(event.data.sessionID);
-      this.optedOutSessions.delete(event.data.sessionID);
-      this.observedSessions.delete(event.data.sessionID);
+      this.turnStates.delete(event.data.sessionID);
+      this.promptGenerations.delete(event.data.sessionID);
+      if (locationMatch !== true) return;
       try {
-        this.core.capture.markReconciled(event.data.sessionID, "closed");
+        this.core.capture.markReconciled(
+          event.data.sessionID,
+          "closed",
+          undefined,
+          false,
+          this.binding.bindingKey,
+          this.binding.projectID,
+        );
       } catch {}
       return;
     }
-    if (await this.turnOptedOut(event.data.sessionID)) return;
+    if (locationMatch === false) return;
+    if (!(await this.matchesBinding(event.data.sessionID))) return;
+    if (this.abort.signal.aborted) return;
+    if (await this.turnOptedOut(event.data.sessionID, eventAssistantMessageID(event))) return;
+    if (this.abort.signal.aborted) return;
     if (event.type === "session.text.ended" && this.captureEnabled) {
       const safe = safeAssistantCandidate([{ type: "text", text: event.data.text }]);
       if (safe.candidate) {
@@ -267,37 +334,89 @@ export class PluginRuntime {
       return;
     }
     this.reconcileQueue.add(sessionID);
+    this.reconcilePending.add(sessionID);
+    this.scheduleReconcileDispatch();
+  }
+
+  private scheduleReconcileDispatch(): void {
+    if (this.reconcileDispatchScheduled) return;
+    this.reconcileDispatchScheduled = true;
     queueMicrotask(() => {
-      if (this.abort.signal.aborted) {
-        this.reconcileQueue.delete(sessionID);
-        this.reconcileAgain.delete(sessionID);
-        return;
-      }
-      const task = (async () => {
-        do {
-          this.reconcileAgain.delete(sessionID);
-          await this.reconcile(sessionID);
-        } while (!this.abort.signal.aborted && this.reconcileAgain.delete(sessionID));
-      })().finally(() => {
+      this.reconcileDispatchScheduled = false;
+      this.dispatchReconciles();
+    });
+  }
+
+  private dispatchReconciles(): void {
+    while (
+      !this.abort.signal.aborted &&
+      this.reconcileActive < MAX_RECONCILE_CONCURRENCY
+    ) {
+      const sessionID = this.reconcilePending.values().next().value as string | undefined;
+      if (sessionID === undefined) return;
+      this.reconcilePending.delete(sessionID);
+      this.reconcileActive++;
+      const task = this.runReconcile(sessionID).finally(() => {
+        this.reconcileActive--;
         this.reconcileQueue.delete(sessionID);
         this.reconcileTasks.delete(task);
         const rerun = this.reconcileAgain.delete(sessionID);
-        if (rerun && !this.abort.signal.aborted) this.queueReconcile(sessionID);
+        if (rerun && !this.abort.signal.aborted) {
+          this.reconcileQueue.add(sessionID);
+          this.reconcilePending.add(sessionID);
+        }
+        this.scheduleReconcileDispatch();
       });
       this.reconcileTasks.add(task);
-    });
+    }
+  }
+
+  private async runReconcile(sessionID: string): Promise<void> {
+    do {
+      this.reconcileAgain.delete(sessionID);
+      await this.reconcile(sessionID);
+    } while (!this.abort.signal.aborted && this.reconcileAgain.delete(sessionID));
   }
 
   private async reconcile(sessionID: string): Promise<void> {
     if (this.abort.signal.aborted || !this.captureEnabled) return;
     try {
-      if (!(await sessionMatchesBinding(this.ctx, sessionID, this.binding))) return;
-      const messages = await this.ctx.session.context({ sessionID });
+      const checkpoint = this.core.capture.getCheckpoint?.(
+        sessionID,
+        this.binding.bindingKey,
+        this.binding.projectID,
+      );
+      const messages = await withTimeout(
+        async (signal) => {
+          if (!(await sessionMatchesBinding(this.ctx, sessionID, this.binding, signal))) {
+            return undefined;
+          }
+          return this.ctx.session.context({ sessionID }, { signal });
+        },
+        this.options.retrieval.timeoutMs,
+        this.abort.signal,
+      );
+      if (!messages) return;
+      if (this.abort.signal.aborted) return;
+      const checkpointIndex =
+        checkpoint?.lastMessageID === undefined
+          ? -1
+          : messages.findIndex(
+              (message) =>
+                Boolean(message && typeof message === "object" && "id" in message) &&
+                String((message as { id: unknown }).id) === checkpoint.lastMessageID,
+            );
+      const firstMessageIndex = checkpointIndex < 0 ? 0 : checkpointIndex + 1;
       let lastMessageID: string | undefined;
-      let skipAssistantTurn = false;
-      for (const message of messages) {
-        if (!("id" in message)) continue;
+      let skipAssistantTurn =
+        checkpointIndex < 0
+          ? false
+          : /\[memory:off\]/i.test(latestUserText(messages.slice(0, firstMessageIndex)) ?? "");
+      for (let index = 0; index < messages.length; index++) {
+        const message = messages[index];
+        if (!message || typeof message !== "object" || !("id" in message)) continue;
         lastMessageID = String(message.id);
+        if (index < firstMessageIndex) continue;
         if (message.type === "user") {
           skipAssistantTurn = /\[memory:off\]/i.test(message.text);
           if (skipAssistantTurn) continue;
@@ -338,10 +457,27 @@ export class PluginRuntime {
           }
         }
       }
-      this.core.capture.markReconciled(sessionID, "active", lastMessageID);
+      if (this.abort.signal.aborted) return;
+      this.core.capture.markReconciled(
+        sessionID,
+        "active",
+        lastMessageID,
+        false,
+        this.binding.bindingKey,
+        this.binding.projectID,
+      );
     } catch (error) {
       try {
-        this.core.capture.markReconciled(sessionID, "unavailable", undefined, true);
+        if (!this.abort.signal.aborted) {
+          this.core.capture.markReconciled(
+            sessionID,
+            "unavailable",
+            undefined,
+            true,
+            this.binding.bindingKey,
+            this.binding.projectID,
+          );
+        }
       } catch {}
       this.log("reconcile", error);
     }
@@ -419,14 +555,86 @@ export class PluginRuntime {
     return ["shadow-retrieval", "inject", "auto-write"].includes(this.options.mode);
   }
 
-  private async turnOptedOut(sessionID: string): Promise<boolean> {
-    if (this.optedOutSessions.has(sessionID)) return true;
-    if (this.observedSessions.has(sessionID)) return false;
-    const messages = await this.ctx.session.context({ sessionID });
-    this.observedSessions.add(sessionID);
-    const optedOut = /\[memory:off\]/i.test(latestUserText(messages) ?? "");
-    if (optedOut) this.optedOutSessions.add(sessionID);
+  private async turnOptedOut(sessionID: string, assistantMessageID?: string): Promise<boolean> {
+    if (this.turnStates.get(sessionID)?.optedOut) return true;
+    const probeKey = `${sessionID}\0${assistantMessageID ?? ""}`;
+    const existing = this.optOutProbes.get(probeKey);
+    if (existing) {
+      const optedOut = await existing;
+      return optedOut || Boolean(this.turnStates.get(sessionID)?.optedOut);
+    }
+    const initialState = this.turnStates.get(sessionID);
+    const probe = (async () => {
+      const messages = await withTimeout(
+        (signal) => this.ctx.session.context({ sessionID }, { signal }),
+        this.options.retrieval.timeoutMs,
+        this.abort.signal,
+      );
+      if (assistantMessageID !== undefined) {
+        if (
+          this.turnStates.get(sessionID) !== initialState &&
+          this.turnStates.get(sessionID)?.optedOut
+        ) {
+          return true;
+        }
+        const turn = userTurnForMessage(messages, assistantMessageID);
+        return turn ? /\[memory:off\]/i.test(turn.text) : true;
+      }
+      if (this.turnStates.get(sessionID) !== initialState) {
+        return Boolean(this.turnStates.get(sessionID)?.optedOut);
+      }
+      return this.updateTurnFromMessages(sessionID, messages);
+    })();
+    this.optOutProbes.set(probeKey, probe);
+    try {
+      const optedOut = await probe;
+      return optedOut || Boolean(this.turnStates.get(sessionID)?.optedOut);
+    } finally {
+      if (this.optOutProbes.get(probeKey) === probe) this.optOutProbes.delete(probeKey);
+    }
+  }
+
+  private updateTurnFromMessages(sessionID: string, messages: readonly unknown[]): boolean {
+    const latest = latestUserTurn(messages);
+    const current = this.turnStates.get(sessionID);
+    if (!latest) return Boolean(current?.optedOut);
+    if (current && latest.messageID === current.messageID) return current.optedOut;
+    if (current?.optedOut) {
+      if (current.messageID === undefined) return true;
+      const currentIndex = messageIndex(messages, current.messageID);
+      const latestIndex = latest.messageID === undefined ? -1 : messageIndex(messages, latest.messageID);
+      if (currentIndex < 0 || latestIndex <= currentIndex) return true;
+    }
+    const optedOut = /\[memory:off\]/i.test(latest.text);
+    this.turnStates.set(sessionID, {
+      ...(latest.messageID === undefined ? {} : { messageID: latest.messageID }),
+      optedOut,
+      source: "history",
+    });
+    if (optedOut) this.promptCache.delete(sessionID);
     return optedOut;
+  }
+
+  private matchesBinding(sessionID: string): Promise<boolean> {
+    return withTimeout(
+      (signal) => sessionMatchesBinding(this.ctx, sessionID, this.binding, signal),
+      this.options.retrieval.timeoutMs,
+      this.abort.signal,
+    );
+  }
+
+  private discardPromptGeneration(
+    sessionID: string,
+    generation: number,
+    preserveOptOut: boolean,
+  ): void {
+    if (this.promptGenerations.get(sessionID) !== generation) return;
+    this.promptGenerations.delete(sessionID);
+    this.promptCache.delete(sessionID);
+    const state = this.turnStates.get(sessionID);
+    if (state?.source === "prompt" && (!preserveOptOut || !state.optedOut)) {
+      this.turnStates.delete(sessionID);
+    }
   }
 
   private get captureMode(): "shadow" | "auto-write" {
@@ -454,19 +662,39 @@ function isSessionEvent(
   return Boolean(event.data && typeof event.data === "object" && "sessionID" in event.data);
 }
 
+function eventAssistantMessageID(event: OpenCodeEvent): string | undefined {
+  if (!event.data || typeof event.data !== "object") return undefined;
+  if ("assistantMessageID" in event.data && event.data.assistantMessageID !== undefined) {
+    return String(event.data.assistantMessageID);
+  }
+  if ("messageID" in event.data && event.data.messageID !== undefined) {
+    return String(event.data.messageID);
+  }
+  return undefined;
+}
+
 function latestUserText(messages: readonly unknown[]): string | undefined {
+  return latestUserTurn(messages)?.text;
+}
+
+function latestUserTurn(
+  messages: readonly unknown[],
+): { messageID?: string; text: string } | undefined {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (!message || typeof message !== "object") continue;
+    const messageID = "id" in message ? String((message as { id: unknown }).id) : undefined;
     if (
       (message as { type?: unknown }).type === "user" &&
       typeof (message as { text?: unknown }).text === "string"
     ) {
-      return (message as { text: string }).text;
+      return { ...(messageID === undefined ? {} : { messageID }), text: (message as { text: string }).text };
     }
     if ((message as { role?: unknown }).role !== "user") continue;
     const content = (message as { content?: unknown }).content;
-    if (typeof content === "string") return content;
+    if (typeof content === "string") {
+      return { ...(messageID === undefined ? {} : { messageID }), text: content };
+    }
     if (!Array.isArray(content)) continue;
     const text = content
       .filter(
@@ -480,9 +708,25 @@ function latestUserText(messages: readonly unknown[]): string | undefined {
       )
       .map((part) => part.text)
       .join("\n");
-    if (text) return text;
+    if (text) return { ...(messageID === undefined ? {} : { messageID }), text };
   }
   return undefined;
+}
+
+function userTurnForMessage(
+  messages: readonly unknown[],
+  messageID: string,
+): { messageID?: string; text: string } | undefined {
+  const index = messageIndex(messages, messageID);
+  return index < 0 ? undefined : latestUserTurn(messages.slice(0, index + 1));
+}
+
+function messageIndex(messages: readonly unknown[], messageID: string): number {
+  return messages.findIndex(
+    (message) =>
+      Boolean(message && typeof message === "object" && "id" in message) &&
+      String((message as { id: unknown }).id) === messageID,
+  );
 }
 
 function safeErrorCode(value: string): string {
@@ -503,6 +747,39 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
         resolve();
       },
       { once: true },
+    );
+  });
+}
+
+function withTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  milliseconds: number,
+  parentSignal: AbortSignal,
+): Promise<T> {
+  if (parentSignal.aborted) return Promise.reject(new Error("aborted"));
+  return new Promise<T>((resolve, reject) => {
+    const controller = new AbortController();
+    let settled = false;
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      parentSignal.removeEventListener("abort", onAbort);
+      action();
+    };
+    const abort = (code: "aborted" | "timeout") => {
+      controller.abort();
+      finish(() => reject(new Error(code)));
+    };
+    const onAbort = () => abort("aborted");
+    const timer = setTimeout(
+      () => abort("timeout"),
+      milliseconds,
+    );
+    parentSignal.addEventListener("abort", onAbort, { once: true });
+    operation(controller.signal).then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error)),
     );
   });
 }

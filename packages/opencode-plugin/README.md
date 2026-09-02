@@ -2,7 +2,7 @@
 
 English | [Türkçe](README.tr.md)
 
-Optional OpenCode V2 adapter for `@vaur94/agz-memory@0.4.1`. It adds explicit
+Optional OpenCode V2 adapter for `@vaur94/agz-memory@0.5.0`. It adds explicit
 project binding, redacted capture, bounded retrieval, and staged context
 injection to OpenCode `0.0.0-beta-18743`.
 
@@ -15,7 +15,7 @@ retrieval deadline.
 {
   "plugins": [
     {
-      "package": "@vaur94/agz-memory-plugin@0.4.1",
+      "package": "@vaur94/agz-memory-plugin@0.5.0",
       "options": {
         "mode": "off",
         "autoCreateProjects": false,
@@ -42,6 +42,11 @@ binding, then progress through `shadow-capture`, `shadow-retrieval`, `inject`,
 and `auto-write` only after reviewing each stage. A version mismatch, missing or
 conflicting binding, database error, or unsupported semantic backend disables
 the plugin rather than guessing.
+
+Installing this plugin also installs its exact core dependency, which contains
+the `agz-memory` skill catalog. OpenCode does not discover skills inside npm
+dependencies automatically; use the explicit versioned `skills` source in the
+repository README. The plugin never edits the user's global `AGENTS.md`.
 
 See the repository [README](https://github.com/ugur-murat-alt/agz-memory#readme)
 for binding fields, mode behavior, recovery commands, and the security model.

@@ -1,15 +1,25 @@
 import { randomUUID } from "crypto";
 import { Database } from "bun:sqlite";
-import { chmodSync, copyFileSync, existsSync } from "fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync } from "fs";
 import { hashRoot } from "./identity";
 import { normalizeProjectName } from "./project";
 import { PREDICATES, SCHEMA_VERSION } from "./types";
 import { createVerifiedBackup, restoreVerifiedBackup, type VerifiedBackup } from "./db/backup";
-import { assertHealthyDatabase } from "./db/health";
+import { assertHealthyDatabase, assertSchemaV11, isSQLiteBusyError } from "./db/health";
+import { assertLegacySchemaIdentity } from "./db/legacy-health";
 import { acquireMigrationLock, type MigrationLock } from "./db/migration-lock";
+import {
+  acquireDatabaseLease,
+  acquireMaintenanceGate,
+  ensureDatabaseParent,
+  recoverStaleMaintenanceGate,
+  type DatabaseLease,
+  type MaintenanceGate,
+} from "./db/maintenance";
 import { migrateV8ToV9 } from "./db/migrations/v009";
 import { migrateV9ToV10 } from "./db/migrations/v010";
-import { createSchema, FTS_V9, SCHEMA_TABLES } from "./db/schema";
+import { migrateV10ToV11 } from "./db/migrations/v011";
+import { APPLICATION_ID, createSchemaV11 } from "./db/schema";
 import { PRODUCT_VERSION } from "./version";
 
 const DDL = `
@@ -52,15 +62,32 @@ CREATE INDEX IF NOT EXISTS note_edges_target_idx ON note_edges(project_id, targe
 CREATE TABLE IF NOT EXISTS schema_state (version INTEGER PRIMARY KEY);
 `;
 
+// Pre-open validation can overlap a just-created SQLite schema on Windows. Keep
+// retries confined to this read-only probe; the post-lock probe remains authoritative.
+const PRE_OPEN_PROBE_TIMEOUT_MS = 5_000;
+
 export interface OpenedDB {
   db: Database;
   close: () => void;
 }
 
 export function openMemoryDatabase(path: string): OpenedDB {
-  let db = openDatabase(path);
+  ensureDatabaseParent(path);
+  assertSupportedDatabaseBeforeOpen(path);
+  recoverStaleMaintenanceGate(path, () => assertSupportedDatabaseBeforeOpen(path));
+  let lock: MigrationLock | undefined = acquireMigrationLock(path, SCHEMA_VERSION);
+  let lease: DatabaseLease | undefined = acquireDatabaseLease(path);
+  let db: Database;
+  try {
+    assertSupportedDatabaseBeforeOpen(path);
+    db = openDatabase(path);
+  } catch (error) {
+    lease.release();
+    lock.release();
+    throw error;
+  }
   let dbOpen = true;
-  let lock: MigrationLock | undefined;
+  let maintenance: MaintenanceGate | undefined;
   let backup: VerifiedBackup | undefined;
   try {
     const existingVersion = getSchemaVersion(db);
@@ -70,34 +97,123 @@ export function openMemoryDatabase(path: string): OpenedDB {
       );
     }
 
-    const hasExistingData = hasLegacyV2(db) || hasTable(db, "notes") || Boolean(existingVersion);
-    if (!hasExistingData) {
+    const hasObjects = hasApplicationObjects(db);
+    if (!hasObjects) {
+      db.close();
+      dbOpen = false;
+      lease.release();
+      lease = undefined;
+      lease = acquireDatabaseLease(path);
+      assertSupportedDatabaseBeforeOpen(path);
+      db = openDatabase(path);
+      dbOpen = true;
+      if (hasApplicationObjects(db)) {
+        const initializedVersion = getSchemaVersion(db);
+        if (initializedVersion?.version !== SCHEMA_VERSION) {
+          throw new Error("database changed during initialization");
+        }
+        db.exec("PRAGMA foreign_keys=ON");
+        assertHealthyDatabase(db);
+        lock.release();
+        lock = undefined;
+        const opened = openedWithLease(db, lease);
+        lease = undefined;
+        return opened;
+      }
       db.exec("PRAGMA foreign_keys=ON");
-      db.transaction(() => createSchema(db))();
+      db.exec(`PRAGMA application_id = ${APPLICATION_ID}`);
+      db.transaction(() => createSchemaV11(db))();
       assertHealthyDatabase(db);
-      return { db, close: () => db.close() };
+      lock.release();
+      lock = undefined;
+      const opened = openedWithLease(db, lease);
+      lease = undefined;
+      return opened;
+    }
+
+    const hasV11Marker = hasV11IdentityMarker(db);
+    if (!existingVersion && hasV11Marker) {
+      assertSchemaV11(db);
+    }
+    if (existingVersion && existingVersion.version < SCHEMA_VERSION && hasV11Marker) {
+      assertSchemaV11(db);
+    }
+    if (!existingVersion && !hasLegacyV2(db)) throw new Error("unrecognized_database");
+
+    if (existingVersion?.version === SCHEMA_VERSION) {
+      db.exec("PRAGMA foreign_keys=ON");
+      assertHealthyDatabase(db);
+      lock.release();
+      lock = undefined;
+      const opened = openedWithLease(db, lease);
+      lease = undefined;
+      return opened;
     }
 
     if ((existingVersion?.version ?? 0) < SCHEMA_VERSION) {
       db.close();
       dbOpen = false;
-      lock = acquireMigrationLock(path, SCHEMA_VERSION);
+      lease.release();
+      lease = undefined;
+      lease = acquireDatabaseLease(path);
+      assertSupportedDatabaseBeforeOpen(path);
       db = openDatabase(path);
       dbOpen = true;
-      const migrationVersion = getSchemaVersion(db);
+      let migrationVersion = getSchemaVersion(db);
       if (migrationVersion && migrationVersion.version > SCHEMA_VERSION) {
         throw new Error(
           `database schema v${migrationVersion.version} is newer than supported v${SCHEMA_VERSION}`,
         );
       }
+      if (!migrationVersion && hasV11IdentityMarker(db)) assertSchemaV11(db);
+      if (migrationVersion && migrationVersion.version < SCHEMA_VERSION && hasV11IdentityMarker(db)) {
+        assertSchemaV11(db);
+      }
+      if (!migrationVersion && !hasLegacyV2(db)) throw new Error("unrecognized_database");
       if ((migrationVersion?.version ?? 0) === SCHEMA_VERSION) {
+        db.exec("PRAGMA foreign_keys=ON");
+        assertHealthyDatabase(db);
         lock.release();
         lock = undefined;
+        const opened = openedWithLease(db, lease);
+        lease = undefined;
+        return opened;
+      }
+      db.close();
+      dbOpen = false;
+      lease.release();
+      lease = undefined;
+
+      maintenance = acquireMaintenanceGate(path);
+      assertSupportedDatabaseBeforeOpen(path);
+      db = openDatabase(path);
+      dbOpen = true;
+      migrationVersion = getSchemaVersion(db);
+      if (migrationVersion && migrationVersion.version > SCHEMA_VERSION) {
+        throw new Error(
+          `database schema v${migrationVersion.version} is newer than supported v${SCHEMA_VERSION}`,
+        );
+      }
+      if (!migrationVersion && hasV11IdentityMarker(db)) assertSchemaV11(db);
+      if (migrationVersion && migrationVersion.version < SCHEMA_VERSION && hasV11IdentityMarker(db)) {
+        assertSchemaV11(db);
+      }
+      if (!migrationVersion && !hasLegacyV2(db)) throw new Error("unrecognized_database");
+      if ((migrationVersion?.version ?? 0) === SCHEMA_VERSION) {
+        db.close();
+        dbOpen = false;
+        const handoff = handoffMaintenanceToLease(path, maintenance);
+        maintenance = undefined;
+        db = handoff.db;
+        dbOpen = true;
+        lease = handoff.lease;
         db.exec("PRAGMA foreign_keys=ON");
-        db.exec(SCHEMA_TABLES);
-        db.exec(FTS_V9);
         assertHealthyDatabase(db);
-        return { db, close: () => db.close() };
+        lock.release();
+        lock = undefined;
+        const opened = openedWithLease(db, lease);
+        lease = undefined;
+        return opened;
       }
       backup = createVerifiedBackup(
         db,
@@ -130,7 +246,16 @@ export function openMemoryDatabase(path: string): OpenedDB {
         db.transaction(() => migrateV8ToV9(db))();
         version = 9;
       }
-      if (version < 10) db.transaction(() => migrateV9ToV10(db))();
+      if (version < 10) {
+        db.transaction(() => migrateV9ToV10(db))();
+        version = 10;
+      }
+      if (version < SCHEMA_VERSION) {
+        db.transaction(() => {
+          db.exec(`PRAGMA application_id = ${APPLICATION_ID}`);
+          migrateV10ToV11(db);
+        })();
+      }
       db.exec("PRAGMA foreign_keys=ON");
       if ((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1) {
         throw new Error("failed to enable database foreign keys");
@@ -139,17 +264,31 @@ export function openMemoryDatabase(path: string): OpenedDB {
       console.warn(
         `[agz-memory] migrated to v${SCHEMA_VERSION} (backup: ${backup.manifestPath})`,
       );
+      backup = undefined;
+      db.close();
+      dbOpen = false;
+      const handoff = handoffMaintenanceToLease(path, maintenance);
+      maintenance = undefined;
+      db = handoff.db;
+      dbOpen = true;
+      lease = handoff.lease;
+      db.exec("PRAGMA foreign_keys=ON");
+      assertHealthyDatabase(db);
       lock.release();
       lock = undefined;
-      return { db, close: () => db.close() };
+      const opened = openedWithLease(db, lease);
+      lease = undefined;
+      return opened;
     }
 
     db.exec("PRAGMA foreign_keys=ON");
-    db.exec(SCHEMA_TABLES);
-    db.exec(FTS_V9);
     assertHealthyDatabase(db);
     db.exec("PRAGMA foreign_keys=ON");
-    return { db, close: () => db.close() };
+    lock.release();
+    lock = undefined;
+    const opened = openedWithLease(db, lease);
+    lease = undefined;
+    return opened;
   } catch (error) {
     if (dbOpen) db.close();
     if (backup) {
@@ -158,6 +297,7 @@ export function openMemoryDatabase(path: string): OpenedDB {
           backup.manifestPath,
           path,
           "RESTORE_DATABASE_FROM_VERIFIED_BACKUP",
+          maintenance,
         );
       } catch (restoreError) {
         throw new AggregateError([error, restoreError], "migration and automatic restore failed");
@@ -165,13 +305,73 @@ export function openMemoryDatabase(path: string): OpenedDB {
     }
     throw error;
   } finally {
+    lease?.release();
+    maintenance?.release();
     lock?.release();
   }
 }
 
+export function openReadOnlyMemoryDatabase(path: string): OpenedDB {
+  assertSupportedDatabaseBeforeOpen(path);
+  recoverStaleMaintenanceGate(path, () => assertSupportedDatabaseBeforeOpen(path));
+  const lease = acquireDatabaseLease(path);
+  try {
+    assertSupportedDatabaseBeforeOpen(path);
+    assertDatabasePath(path);
+    const db = new Database(path, { readonly: true });
+    try {
+      assertDatabasePath(path);
+      assertSupportedDatabase(db);
+      db.exec("PRAGMA busy_timeout=5000");
+      return openedWithLease(db, lease);
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
+}
+
+function handoffMaintenanceToLease(
+  path: string,
+  maintenance: MaintenanceGate,
+): { db: Database; lease: DatabaseLease } {
+  maintenance.release();
+  const lease = acquireDatabaseLease(path);
+  try {
+    return { db: openDatabase(path), lease };
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
+}
+
+function openedWithLease(db: Database, lease: DatabaseLease): OpenedDB {
+  let closed = false;
+  return {
+    db,
+    close: () => {
+      if (closed) return;
+      closed = true;
+      try {
+        db.close();
+      } finally {
+        lease.release();
+      }
+    },
+  };
+}
+
 function openDatabase(path: string): Database {
+  assertDatabasePath(path);
   const db = new Database(path, { create: true });
   try {
+    assertDatabasePath(path);
+    db.exec("PRAGMA query_only=ON");
+    assertSupportedDatabase(db);
+    db.exec("PRAGMA query_only=OFF");
     chmodSync(path, 0o600);
     db.exec("PRAGMA busy_timeout=5000");
     db.exec("PRAGMA journal_mode=WAL");
@@ -182,16 +382,103 @@ function openDatabase(path: string): Database {
   }
 }
 
+function assertSupportedDatabaseBeforeOpen(path: string): void {
+  const deadline = Date.now() + PRE_OPEN_PROBE_TIMEOUT_MS;
+  while (true) {
+    try {
+      assertSupportedDatabaseBeforeOpenOnce(path);
+      return;
+    } catch (error) {
+      if (!isSQLiteBusyError(error) || Date.now() >= deadline) throw error;
+      Bun.sleepSync(Math.min(50, Math.max(1, deadline - Date.now())));
+    }
+  }
+}
+
+function assertSupportedDatabaseBeforeOpenOnce(path: string): void {
+  assertDatabasePath(path);
+  if (!existsSync(path)) return;
+  const db = new Database(path, { readonly: true });
+  try {
+    assertDatabasePath(path);
+    assertSupportedDatabase(db);
+  } finally {
+    db.close();
+  }
+}
+
+function assertSupportedDatabase(db: Database): void {
+  const existingVersion = getSchemaVersion(db);
+  if (existingVersion && existingVersion.version > SCHEMA_VERSION) {
+    throw new Error(
+      `database schema v${existingVersion.version} is newer than supported v${SCHEMA_VERSION}`,
+    );
+  }
+  if (!hasApplicationObjects(db)) return;
+  const hasV11Marker = hasV11IdentityMarker(db);
+  if (!existingVersion) {
+    if (!hasLegacyV2(db)) throw new Error("unrecognized_database");
+    assertLegacySchemaIdentity(db, 2);
+    return;
+  }
+  if (existingVersion.version === SCHEMA_VERSION || hasV11Marker) {
+    assertSchemaV11(db);
+    return;
+  }
+  if (existingVersion.version < 2 || existingVersion.version > 10) {
+    throw new Error("unrecognized_database");
+  }
+  assertLegacySchemaIdentity(db, existingVersion.version);
+}
+
+function assertDatabasePath(path: string): void {
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new Error("database path must not be a symbolic link");
+    }
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+    throw error;
+  }
+}
+
 function getSchemaVersion(db: Database): { version: number } | undefined {
   if (!hasTable(db, "schema_state")) return undefined;
-  return db.query("SELECT version FROM schema_state ORDER BY version DESC LIMIT 1").get() as
-    | { version: number }
-    | undefined;
+  let rows: Array<{ version: unknown }>;
+  try {
+    rows = db.query("SELECT version FROM schema_state").all() as Array<{
+      version: unknown;
+    }>;
+  } catch (error) {
+    if (isSQLiteBusyError(error)) throw error;
+    throw new Error("unrecognized_database");
+  }
+  if (
+    rows.length !== 1 ||
+    typeof rows[0]?.version !== "number" ||
+    !Number.isSafeInteger(rows[0].version)
+  ) {
+    throw new Error("unrecognized_database");
+  }
+  return { version: rows[0].version };
 }
 
 function migrateToV8(db: Database): void {
   db.transaction(() => {
     adoptLegacyProjectIDs(db);
+    importLegacyAssociations(db);
+    if (hasColumn(db, "notes", "current_revision")) {
+      dropLegacyV2Tables(db);
+      db.query("DELETE FROM schema_state").run();
+      db.query("INSERT INTO schema_state (version) VALUES (8)").run();
+      return;
+    }
+    db.exec(`
+      DROP TRIGGER IF EXISTS notes_fts_ai;
+      DROP TRIGGER IF EXISTS notes_fts_ad;
+      DROP TRIGGER IF EXISTS notes_fts_au;
+      DROP TABLE IF EXISTS notes_fts;
+    `);
     const pinned = hasColumn(db, "notes", "pinned") ? "pinned" : "0";
     db.exec(`
       CREATE TABLE notes_v7 (
@@ -236,7 +523,7 @@ function migrateToV8(db: Database): void {
       ALTER TABLE notes_v7 RENAME TO notes;
       ALTER TABLE note_edges_v7 RENAME TO note_edges;
     `);
-    importLegacyAssociations(db);
+    dropLegacyV2Tables(db);
     db.query("DELETE FROM schema_state").run();
     db.query("INSERT INTO schema_state (version) VALUES (8)").run();
   })();
@@ -291,6 +578,18 @@ function hasLegacyV2(db: Database): boolean {
   return hasTable(db, "memory_items");
 }
 
+function hasApplicationObjects(db: Database): boolean {
+  const row = db
+    .query("SELECT COUNT(*) AS count FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
+    .get() as { count: number };
+  return row.count > 0;
+}
+
+function hasV11IdentityMarker(db: Database): boolean {
+  if (hasTable(db, "agz_meta")) return true;
+  return (db.query("PRAGMA application_id").get() as { application_id: number }).application_id === APPLICATION_ID;
+}
+
 function hasTable(db: Database, table: string): boolean {
   const row = db.query("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name = ?").get(table) as
     | { n: number }
@@ -336,9 +635,26 @@ function migrateFromV2(db: Database, path: string) {
       edges: hasTable(db, "memory_edges"),
     });
     adoptLegacyProjectIDs(db);
+    dropLegacyV2Tables(db);
     db.query("DELETE FROM schema_state").run();
     db.query("INSERT INTO schema_state (version) VALUES (8)").run();
   })();
+}
+
+function dropLegacyV2Tables(db: Database): void {
+  for (const table of [
+    "document_chunks",
+    "document_sources",
+    "memories",
+    "memory_associations",
+    "memory_edges",
+    "memory_links",
+    "memory_identities",
+    "memory_versions",
+    "memory_items",
+  ]) {
+    db.exec(`DROP TABLE IF EXISTS ${table}`);
+  }
 }
 
 function migrateFromV2Data(

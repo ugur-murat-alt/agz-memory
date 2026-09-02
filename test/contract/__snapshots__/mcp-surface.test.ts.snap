@@ -1,14 +1,28 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`MCP compatibility surface keeps initialize identity, instructions, and exact tool catalog stable 1`] = `
+"Use project-scoped memory for durable facts across sessions.
+- Start with project_list. Reuse a project only when it intentionally represents the same durable workspace or product; create one only when no matching project exists. If the listed projects are ambiguous, ask rather than guessing from a directory or session name.
+- Prefer the immutable projectID for stable references. projectName is a convenient unique lookup, but names can change.
+- Every memory_recall, memory_read, memory_update, memory_link, and memory_pin call must select exactly one project by projectID or projectName.
+- The MCP server does not inject notes automatically. Recall relevant history before relying on prior decisions, and use memory_read for full indexed content and graph neighbors.
+- After substantial completed work, update an existing note or create a new one only for durable verified facts, decisions, procedures, research, preferences, tasks, or context.
+- Never save transcripts, guesses, secrets, credentials, hidden reasoning, or routine progress.
+- Use memory_pin only to prioritize important matching notes. Read directed links as sourceID PREDICATE targetID; links never cross projects.
+- Inspect every result from a batch because mutations are ordered and non-atomic: earlier items remain applied when a later item fails.
+- memory_update with delete:true permanently deletes one note. project_delete permanently deletes a project and all owned memory. Verify current IDs first and use destructive operations only when explicitly intended."
+`;
+
+exports[`MCP compatibility surface keeps initialize identity, instructions, and exact tool catalog stable 2`] = `
 [
   {
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": false,
     },
-    "description": "Create one graph edge or up to 10 ordered, non-atomic edge operations between notes in the same selected project; inspect every result because earlier links remain applied if a later item fails. Cross-project links are rejected. Predicates: SUPPORTS, DERIVED_FROM, PART_OF, ABOUT, PRECEDES, SUPERSEDES.",
+    "description": "Create one directed graph edge or up to 10 ordered, non-atomic edge operations between active notes in the same selected project; inspect every result because earlier links remain applied if a later item fails. Read each edge as sourceID PREDICATE targetID. Cross-project links are rejected. Predicates: SUPPORTS, DERIVED_FROM, PART_OF, ABOUT, PRECEDES, SUPERSEDES.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "anyOf": [
@@ -16,6 +30,7 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "predicate": {
+              "description": "Read as sourceID PREDICATE targetID: A SUPPORTS B; A DERIVED_FROM B; A PART_OF B; A ABOUT B; A PRECEDES B; A SUPERSEDES B.",
               "enum": [
                 "SUPPORTS",
                 "DERIVED_FROM",
@@ -33,9 +48,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "string",
             },
             "sourceID": {
+              "description": "Subject/source note of the directed relationship.",
               "type": "string",
             },
             "targetID": {
+              "description": "Object/target note of the directed relationship.",
               "type": "string",
             },
           },
@@ -51,10 +68,12 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "links": {
+              "description": "One to 10 ordered, non-atomic directed edges.",
               "items": {
                 "additionalProperties": false,
                 "properties": {
                   "predicate": {
+                    "description": "Read as sourceID PREDICATE targetID: A SUPPORTS B; A DERIVED_FROM B; A PART_OF B; A ABOUT B; A PRECEDES B; A SUPERSEDES B.",
                     "enum": [
                       "SUPPORTS",
                       "DERIVED_FROM",
@@ -66,9 +85,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
                     "type": "string",
                   },
                   "sourceID": {
+                    "description": "Subject/source note of the directed relationship.",
                     "type": "string",
                   },
                   "targetID": {
+                    "description": "Object/target note of the directed relationship.",
                     "type": "string",
                   },
                 },
@@ -100,6 +121,7 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "predicate": {
+              "description": "Read as sourceID PREDICATE targetID: A SUPPORTS B; A DERIVED_FROM B; A PART_OF B; A ABOUT B; A PRECEDES B; A SUPERSEDES B.",
               "enum": [
                 "SUPPORTS",
                 "DERIVED_FROM",
@@ -111,15 +133,17 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "string",
             },
             "projectName": {
-              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
               "type": "string",
             },
             "sourceID": {
+              "description": "Subject/source note of the directed relationship.",
               "type": "string",
             },
             "targetID": {
+              "description": "Object/target note of the directed relationship.",
               "type": "string",
             },
           },
@@ -135,10 +159,12 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "links": {
+              "description": "One to 10 ordered, non-atomic directed edges.",
               "items": {
                 "additionalProperties": false,
                 "properties": {
                   "predicate": {
+                    "description": "Read as sourceID PREDICATE targetID: A SUPPORTS B; A DERIVED_FROM B; A PART_OF B; A ABOUT B; A PRECEDES B; A SUPERSEDES B.",
                     "enum": [
                       "SUPPORTS",
                       "DERIVED_FROM",
@@ -150,9 +176,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
                     "type": "string",
                   },
                   "sourceID": {
+                    "description": "Subject/source note of the directed relationship.",
                     "type": "string",
                   },
                   "targetID": {
+                    "description": "Object/target note of the directed relationship.",
                     "type": "string",
                   },
                 },
@@ -168,7 +196,7 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "array",
             },
             "projectName": {
-              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
               "type": "string",
@@ -188,11 +216,12 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
   },
   {
     "annotations": {
-      "destructiveHint": false,
+      "destructiveHint": true,
       "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": false,
     },
-    "description": "Set the pinned state of one active note inside one selected project. Pinned matching notes are prioritized in recall results. This tool never deletes content.",
+    "description": "Set the pinned state of one active note inside one selected project. pinned:true prioritizes matching recall results; pinned:false removes that priority. This tool never deletes note content.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "anyOf": [
@@ -200,9 +229,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "id": {
+              "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
               "type": "string",
             },
             "pinned": {
+              "description": "True to pin the note; false to unpin it.",
               "type": "boolean",
             },
             "projectID": {
@@ -223,13 +254,15 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "id": {
+              "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
               "type": "string",
             },
             "pinned": {
+              "description": "True to pin the note; false to unpin it.",
               "type": "boolean",
             },
             "projectName": {
-              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
               "type": "string",
@@ -252,6 +285,7 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": true,
     },
     "description": "Read one note or up to 10 notes from one selected project, including full content, pin state, project identity, and same-project graph edges.",
@@ -262,6 +296,7 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "id": {
+              "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
               "type": "string",
             },
             "projectID": {
@@ -281,7 +316,9 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "ids": {
+              "description": "One to 10 note IDs to read.",
               "items": {
+                "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
                 "type": "string",
               },
               "maxItems": 10,
@@ -305,10 +342,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "id": {
+              "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
               "type": "string",
             },
             "projectName": {
-              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
               "type": "string",
@@ -324,7 +362,9 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "ids": {
+              "description": "One to 10 note IDs to read.",
               "items": {
+                "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
                 "type": "string",
               },
               "maxItems": 10,
@@ -332,7 +372,7 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "array",
             },
             "projectName": {
-              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
               "type": "string",
@@ -354,6 +394,7 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": true,
     },
     "description": "Search memory only inside one project selected by immutable projectID or unique projectName. Pass one query or up to 10 queries. Indexed cards require memory_read for full content.",
@@ -370,6 +411,7 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "string",
             },
             "query": {
+              "description": "Search terms for durable records in the selected project.",
               "type": "string",
             },
           },
@@ -389,7 +431,9 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "string",
             },
             "queries": {
+              "description": "One to 10 independent searches.",
               "items": {
+                "description": "Search terms for durable records in the selected project.",
                 "type": "string",
               },
               "maxItems": 10,
@@ -407,12 +451,13 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "projectName": {
-              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
               "type": "string",
             },
             "query": {
+              "description": "Search terms for durable records in the selected project.",
               "type": "string",
             },
           },
@@ -426,13 +471,15 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "projectName": {
-              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
               "type": "string",
             },
             "queries": {
+              "description": "One to 10 independent searches.",
               "items": {
+                "description": "Search terms for durable records in the selected project.",
                 "type": "string",
               },
               "maxItems": 10,
@@ -456,6 +503,7 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
     "annotations": {
       "destructiveHint": true,
       "idempotentHint": false,
+      "openWorldHint": false,
       "readOnlyHint": false,
     },
     "description": "Create or patch notes only inside one selected project. Setting delete:true permanently deletes only the specified note from that project; verify the note ID before using delete. A batch contains up to 10 ordered, non-atomic updates: inspect every result because earlier items remain applied if a later item fails. Do not batch destructive deletes unless partial completion is acceptable. Pin state is changed only through memory_pin.",
@@ -466,9 +514,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "content": {
+              "description": "Full durable content. For a new note, the summary is used when content is omitted.",
               "type": "string",
             },
             "kind": {
+              "description": "The durable information category for this note.",
               "enum": [
                 "decision",
                 "fact",
@@ -487,9 +537,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "string",
             },
             "summary": {
+              "description": "Concise retrieval summary of the durable record.",
               "type": "string",
             },
             "title": {
+              "description": "Short, specific title for identifying the durable record.",
               "type": "string",
             },
           },
@@ -505,15 +557,19 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "content": {
+              "description": "Full durable content. For a new note, the summary is used when content is omitted.",
               "type": "string",
             },
             "delete": {
+              "description": "Set true to permanently delete this note; false or omitted performs a patch.",
               "type": "boolean",
             },
             "id": {
+              "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
               "type": "string",
             },
             "kind": {
+              "description": "The durable information category for this note.",
               "enum": [
                 "decision",
                 "fact",
@@ -532,9 +588,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "string",
             },
             "summary": {
+              "description": "Concise retrieval summary of the durable record.",
               "type": "string",
             },
             "title": {
+              "description": "Short, specific title for identifying the durable record.",
               "type": "string",
             },
           },
@@ -554,15 +612,18 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "string",
             },
             "updates": {
+              "description": "One to 10 ordered, non-atomic create, patch, or delete operations.",
               "items": {
                 "anyOf": [
                   {
                     "additionalProperties": false,
                     "properties": {
                       "content": {
+                        "description": "Full durable content. For a new note, the summary is used when content is omitted.",
                         "type": "string",
                       },
                       "kind": {
+                        "description": "The durable information category for this note.",
                         "enum": [
                           "decision",
                           "fact",
@@ -575,9 +636,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
                         "type": "string",
                       },
                       "summary": {
+                        "description": "Concise retrieval summary of the durable record.",
                         "type": "string",
                       },
                       "title": {
+                        "description": "Short, specific title for identifying the durable record.",
                         "type": "string",
                       },
                     },
@@ -592,15 +655,19 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
                     "additionalProperties": false,
                     "properties": {
                       "content": {
+                        "description": "Full durable content. For a new note, the summary is used when content is omitted.",
                         "type": "string",
                       },
                       "delete": {
+                        "description": "Set true to permanently delete this note; false or omitted performs a patch.",
                         "type": "boolean",
                       },
                       "id": {
+                        "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
                         "type": "string",
                       },
                       "kind": {
+                        "description": "The durable information category for this note.",
                         "enum": [
                           "decision",
                           "fact",
@@ -613,9 +680,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
                         "type": "string",
                       },
                       "summary": {
+                        "description": "Concise retrieval summary of the durable record.",
                         "type": "string",
                       },
                       "title": {
+                        "description": "Short, specific title for identifying the durable record.",
                         "type": "string",
                       },
                     },
@@ -641,9 +710,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "content": {
+              "description": "Full durable content. For a new note, the summary is used when content is omitted.",
               "type": "string",
             },
             "kind": {
+              "description": "The durable information category for this note.",
               "enum": [
                 "decision",
                 "fact",
@@ -656,15 +727,17 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "string",
             },
             "projectName": {
-              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
               "type": "string",
             },
             "summary": {
+              "description": "Concise retrieval summary of the durable record.",
               "type": "string",
             },
             "title": {
+              "description": "Short, specific title for identifying the durable record.",
               "type": "string",
             },
           },
@@ -680,15 +753,19 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "content": {
+              "description": "Full durable content. For a new note, the summary is used when content is omitted.",
               "type": "string",
             },
             "delete": {
+              "description": "Set true to permanently delete this note; false or omitted performs a patch.",
               "type": "boolean",
             },
             "id": {
+              "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
               "type": "string",
             },
             "kind": {
+              "description": "The durable information category for this note.",
               "enum": [
                 "decision",
                 "fact",
@@ -701,15 +778,17 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
               "type": "string",
             },
             "projectName": {
-              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
               "type": "string",
             },
             "summary": {
+              "description": "Concise retrieval summary of the durable record.",
               "type": "string",
             },
             "title": {
+              "description": "Short, specific title for identifying the durable record.",
               "type": "string",
             },
           },
@@ -723,21 +802,24 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "additionalProperties": false,
           "properties": {
             "projectName": {
-              "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+              "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
               "type": "string",
             },
             "updates": {
+              "description": "One to 10 ordered, non-atomic create, patch, or delete operations.",
               "items": {
                 "anyOf": [
                   {
                     "additionalProperties": false,
                     "properties": {
                       "content": {
+                        "description": "Full durable content. For a new note, the summary is used when content is omitted.",
                         "type": "string",
                       },
                       "kind": {
+                        "description": "The durable information category for this note.",
                         "enum": [
                           "decision",
                           "fact",
@@ -750,9 +832,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
                         "type": "string",
                       },
                       "summary": {
+                        "description": "Concise retrieval summary of the durable record.",
                         "type": "string",
                       },
                       "title": {
+                        "description": "Short, specific title for identifying the durable record.",
                         "type": "string",
                       },
                     },
@@ -767,15 +851,19 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
                     "additionalProperties": false,
                     "properties": {
                       "content": {
+                        "description": "Full durable content. For a new note, the summary is used when content is omitted.",
                         "type": "string",
                       },
                       "delete": {
+                        "description": "Set true to permanently delete this note; false or omitted performs a patch.",
                         "type": "boolean",
                       },
                       "id": {
+                        "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
                         "type": "string",
                       },
                       "kind": {
+                        "description": "The durable information category for this note.",
                         "enum": [
                           "decision",
                           "fact",
@@ -788,9 +876,11 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
                         "type": "string",
                       },
                       "summary": {
+                        "description": "Concise retrieval summary of the durable record.",
                         "type": "string",
                       },
                       "title": {
+                        "description": "Short, specific title for identifying the durable record.",
                         "type": "string",
                       },
                     },
@@ -821,16 +911,17 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
   {
     "annotations": {
       "destructiveHint": false,
-      "idempotentHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": false,
     },
-    "description": "Create an empty memory project. The returned projectID is immutable; the unique project name may be changed later.",
+    "description": "Create an empty memory project only after project_list confirms that no existing project represents the same durable workspace. The returned projectID is immutable; the unique project name may be changed later.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "projectName": {
-          "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+          "description": "Unique name for the new durable workspace or product memory project.",
           "maxLength": 120,
           "minLength": 1,
           "type": "string",
@@ -847,7 +938,8 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
   {
     "annotations": {
       "destructiveHint": true,
-      "idempotentHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": false,
     },
     "description": "DANGER: Permanently deletes the selected project and every note, pinned note, graph edge, and search record owned by it. This cannot be undone. First call project_list, verify the immutable projectID and current name, then provide both confirmation fields exactly.",
@@ -887,9 +979,10 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "List all memory projects with their immutable IDs, current names, note counts, and pinned-note counts. Use this before selecting a project by ID.",
+    "description": "List all memory projects with their immutable IDs, current names, note counts, and pinned-note counts. Use this before selecting or creating a project; reuse one only when it represents the same durable workspace.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -901,8 +994,9 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
   },
   {
     "annotations": {
-      "destructiveHint": false,
+      "destructiveHint": true,
       "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": false,
     },
     "description": "Rename one project by its immutable projectID. Renaming does not change the ID or detach any notes.",
@@ -917,7 +1011,7 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
           "type": "string",
         },
         "projectName": {
-          "description": "The project's unique current name. Prefer projectID when retaining a long-lived reference.",
+          "description": "New unique name for the selected project. The projectID remains unchanged.",
           "maxLength": 120,
           "minLength": 1,
           "type": "string",

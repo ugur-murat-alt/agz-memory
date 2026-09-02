@@ -1,6 +1,6 @@
 # AGZ Memory Architecture
 
-This document describes the `0.4.1` runtime and SQLite schema v10.
+This document describes the `0.5.0` runtime and SQLite schema v11.
 
 ## System Boundaries
 
@@ -9,7 +9,7 @@ OpenCode MCP client
   -> agz-memory stdio server
      -> nine-tool MCP adapter
         -> memory core
-           -> SQLite schema v10 (canonical)
+            -> SQLite schema v11 (canonical)
 
 OpenCode V2 beta-18743
   -> @vaur94/agz-memory-plugin
@@ -20,7 +20,7 @@ OpenCode V2 beta-18743
 
 SQLite outbox
   -> optional derived retrieval backend
-     -> disabled in 0.4.1; backend = none
+      -> disabled in 0.5.0; backend = none
 ```
 
 The MCP adapter owns tool schemas, annotations, and result envelopes. The core
@@ -42,7 +42,7 @@ current name, and fixed confirmation phrase.
 
 ## Canonical Schema
 
-SQLite schema v10 contains:
+SQLite schema v11 contains:
 
 | Table | Responsibility |
 |---|---|
@@ -50,19 +50,21 @@ SQLite schema v10 contains:
 | `notes` | Current note state, status, subject key, revision, and content hash. |
 | `note_edges` | Typed same-project graph relations. |
 | `notes_fts` | Trigger-maintained FTS5 projection of current note text. |
-| `project_bindings` | Explicit OpenCode-to-memory mapping with canonical path hash. |
-| `capture_checkpoints` | Bounded reconciliation progress without transcript text. |
-| `capture_events` | Redacted, idempotent capture audit under `agz-memory.capture/1`. |
+| `project_bindings` | Explicit OpenCode-to-memory mapping with a v2 tuple-hashed canonical path. |
+| `capture_checkpoints` | Binding-scoped reconciliation progress without transcript text. |
+| `capture_events` | Redacted, idempotent capture audit under `agz-memory.capture/2`. |
 | `note_provenance` | Source identity, extractor/redaction versions, and confidence. |
 | `note_revisions` | Immutable snapshot for each committed note revision. |
-| `index_outbox` | Payload-free queue for replaceable derived indexes. |
+| `index_outbox` | Payload-free, generation- and fence-aware queue for replaceable indexes. |
+| `agz_meta` | Database UUID, product, schema, fingerprint, and hash policy identity. |
 | `schema_state` | The single current schema version. |
 
-The v10 migration changes product-owned persisted identities. Existing v9
-capture rows are copied with the final capture contract; all other data remains
-in place. Migration runs with foreign keys temporarily disabled inside one
-transaction, reenables them, then requires integrity and foreign-key checks to
-pass.
+The v11 migration replaces delimiter-joined hashes with domain-separated,
+length-prefixed v2 tuple hashes. It validates and deterministically maps every
+schema 10 note, binding, capture, checkpoint, and outbox row. Composite foreign
+keys enforce project ownership. Migration publishes schema 11 only after row
+counts, revisions, hashes, FTS, foreign keys, database identity, and the exact
+schema fingerprint pass.
 
 ## Note Lifecycle
 
@@ -72,7 +74,7 @@ Manual MCP writes and automatic writes use the same invariants:
 2. Calculate the canonical content SHA-256.
 3. Commit the note mutation and its provenance/revision in one transaction.
 4. Maintain supersession status and the `SUPERSEDES` edge when applicable.
-5. Enqueue identity-only derived-index operations for configured backends.
+5. Enqueue required identity-only derived-index operations in the same commit.
 6. Let SQLite triggers update FTS5 for insert, update, and delete.
 
 Only active notes are returned by normal recall. Superseded and archived state
@@ -99,9 +101,10 @@ Capture requires all of these gates:
    matches project ID, workspace ID, and canonical directory.
 3. Only terminal user/assistant text or terminal tool status is projected.
 4. Credential and private-key patterns are removed or quarantined.
-5. The strict `CaptureEventV1` parser enforces size, source identity, event
+5. The strict `CaptureEventV2` parser enforces UTF-8 size, kind-specific source identity, event
    kind, and redaction metadata.
-6. A deterministic SHA-256 idempotency key prevents replay duplicates.
+6. A v2 tuple-hashed idempotency key prevents replay duplicates and rejects
+   mismatched reuse as an idempotency conflict.
 7. Shadow modes stop at the audit event. `auto-write` continues only for an
    allowed kind, explicit durable evidence, supported intent, and confidence at
    or above policy.
@@ -116,9 +119,11 @@ stopped at the deadline, overdue work is drained on the next MCP or plugin start
 ## Retrieval Pipeline
 
 Retrieval starts with project-filtered lexical FTS5 results. Same-project graph
-neighbors can be added with bounded fan-out. A reciprocal-rank fusion step
-deduplicates candidates and returns at most eight cards within the configured
-deadline.
+neighbors can be added with bounded fan-out. Optional backend responses are
+strictly parsed, validated against current canonical rows in bounded batch SQL,
+and discarded when project, revision, or derived hash differs. A deterministic
+reciprocal-rank fusion step deduplicates candidates and returns at most eight
+cards within one deadline for the complete pipeline.
 
 The plugin formats cards inside an escaped
 `<agz-memory-context trust="untrusted">` envelope capped at 4,800 characters.
@@ -128,7 +133,7 @@ original OpenCode context unchanged.
 
 Semantic providers implement an optional backend contract: project-filtered
 query, idempotent upsert, deterministic delete, full project purge, and health.
-No provider is enabled in `0.4.1`. The SQLite lexical/graph path remains fully
+No provider is enabled in `0.5.0`. The SQLite lexical/graph path remains fully
 functional without one.
 
 ## Derived Index Outbox
@@ -138,15 +143,26 @@ content hash. It never stores note text. Workers lease rows, derive content
 from the canonical database at execution time, and acknowledge success only
 after the backend call completes.
 
-Leases are reclaimable after expiry. Retries use bounded exponential backoff;
+Leases heartbeat while work runs and every completion is conditional on the
+lease owner, generation, and monotonic fence. Backend calls have a hard timeout
+even when they ignore `AbortSignal`. Retries use bounded exponential backoff;
 terminal failures become `dead` and are visible through the admin CLI. Project
-purge is a first-class operation so a derived backend cannot retain deleted
-project content by omission.
+purge is a first-class operation, and each reindex generation queues a purge
+before a transactional snapshot of active-note upserts.
+
+Outbox adapters must declare `agz-memory-outbox/1` and atomically reject an
+operation context older than the greatest `(sequence, fence)` already applied
+for that backend and project. `sequence` orders distinct queue rows while
+`fence` orders competing leases for one row; `operationKey` makes an accepted
+attempt idempotent. An adapter that cannot enforce this protocol is not eligible
+for outbox registration.
 
 ## Backup, Migration, And Restore
 
-Database upgrades are serialized by a filesystem migration-lock directory with
-an owner record. Before the first schema mutation, AGZ Memory checkpoints WAL,
+Every normal database handle publishes a lifetime lease. Migration, restore,
+backup publication, and prune acquire an exclusive filesystem maintenance gate
+and refuse to proceed while an active or unverifiable lease exists. Before the
+first schema mutation, AGZ Memory checkpoints WAL,
 creates a SQLite-consistent copy with `VACUUM INTO`, verifies integrity and row
 counts, hashes the bytes, and atomically publishes both database and
 `agz-memory-backup/1` manifest.

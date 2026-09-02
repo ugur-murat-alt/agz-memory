@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { hashTuple, type HashTupleValue } from "../hash";
 
 export type CaptureIdentityInput =
   | {
@@ -30,34 +30,31 @@ export type CaptureIdentityInput =
     };
 
 export function captureIdempotencyKey(input: CaptureIdentityInput): string {
-  const fields =
-    input.kind === "user"
-      ? ["capture/1", "user", input.bindingKey, input.sessionID, input.messageID]
-      : input.kind === "assistant"
-        ? [
-            "capture/1",
-            "assistant",
-            input.bindingKey,
-            input.sessionID,
-            input.assistantMessageID,
-            String(input.ordinal),
-          ]
-        : input.kind === "tool"
-          ? [
-              "capture/1",
-              "tool",
-              input.bindingKey,
-              input.sessionID,
-              input.assistantMessageID,
-              input.toolCallID,
-              input.terminalStatus,
-            ]
-          : [
-              "capture/1",
-              "summary",
-              input.bindingKey,
-              input.sessionID,
-              input.checkpointMessageID,
-            ];
-  return createHash("sha256").update(fields.join("\0"), "utf8").digest("hex");
+  let fields: HashTupleValue[];
+  if (input.kind === "user") {
+    fields = ["user", input.bindingKey, input.sessionID, input.messageID];
+  } else if (input.kind === "assistant") {
+    if (!Number.isSafeInteger(input.ordinal) || input.ordinal < 0) {
+      throw new RangeError("assistant capture ordinal must be a non-negative safe integer");
+    }
+    fields = [
+      "assistant",
+      input.bindingKey,
+      input.sessionID,
+      input.assistantMessageID,
+      input.ordinal,
+    ];
+  } else if (input.kind === "tool") {
+    fields = [
+      "tool",
+      input.bindingKey,
+      input.sessionID,
+      input.assistantMessageID,
+      input.toolCallID,
+      input.terminalStatus,
+    ];
+  } else {
+    fields = ["summary", input.bindingKey, input.sessionID, input.checkpointMessageID];
+  }
+  return hashTuple("capture-identity", 2, fields);
 }

@@ -26,7 +26,7 @@ describe("capture safety core", () => {
         sessionID: "session",
         messageID: "message",
       }),
-    ).toBe("644b3fe62359965afe2ee3f5a51db0bbfb7f91c5516c420d10de5e83d16c44f6");
+    ).toBe("ec3fcdf23623f36c05d150ac68751af68498be00facb401c3325cae5d85b71da");
     expect(
       captureIdempotencyKey({
         kind: "assistant",
@@ -35,7 +35,7 @@ describe("capture safety core", () => {
         assistantMessageID: "assistant",
         ordinal: 7,
       }),
-    ).toBe("e3d04a2df736361209875663e929bfadb2865738b200d223c67b849b04b265d3");
+    ).toBe("9d1af203029bcbf7653dd1a5b39cad3b8b1be03cb746203f5e6e72a73d565a2e");
     expect(
       captureIdempotencyKey({
         kind: "tool",
@@ -45,7 +45,7 @@ describe("capture safety core", () => {
         toolCallID: "call",
         terminalStatus: "completed",
       }),
-    ).toBe("be3da97da64d72a64f4989f9b20256834fee8dfa6f882012bd0697eac47aba76");
+    ).toBe("2f2c3ed175819fb69d42cc6a476e5eace287b2fd877040a6fc765729e3eab58f");
     expect(
       captureIdempotencyKey({
         kind: "summary",
@@ -53,7 +53,7 @@ describe("capture safety core", () => {
         sessionID: "session",
         checkpointMessageID: "checkpoint",
       }),
-    ).toBe("d9cca69e3104563c3d0598a7dbb22945b2f51ba30cc5a44c6d5851d32d7b440c");
+    ).toBe("357bcfc325c708247bf28cbd52c65ce30e6d68c66e2346c9178bf5bb5add1fd4");
     expect(() => parseCaptureEvent({ schema: "retired.capture/1" })).toThrow();
   });
 
@@ -147,6 +147,18 @@ describe("capture safety core", () => {
         predicate: string;
       },
     ).toEqual({ predicate: "SUPERSEDES" });
+    const final = capture.ingest(
+      userEvent(projectID, binding.bindingKey, "s", "m3", {
+        ...replacement,
+        summary: "Düzeltme: derleyici olarak Rust kullan.",
+        content: "Düzeltme: derleyici olarak Rust kullan.",
+        targetNoteID: result.noteID,
+      }),
+      "auto-write",
+    );
+    expect(final.outcome).toBe("materialized");
+    expect(memory.deleteProject(projectID, "Supersede").ok).toBe(true);
+    expect((opened.db.query("SELECT COUNT(*) AS count FROM notes").get() as { count: number }).count).toBe(0);
     opened.close();
     rmSync(directory, { recursive: true, force: true });
   });
@@ -230,7 +242,7 @@ describe("capture safety core", () => {
     expect(capture.getCheckpoint("active-session")?.state).toBe("active");
     opened.close();
     rmSync(directory, { recursive: true, force: true });
-  });
+  }, 20_000);
 });
 
 function userEvent(

@@ -1,0 +1,13 @@
+{
+  "schema": "agz-memory.command-evidence/1",
+  "commit": "c8cb4654ab4fedd530729efdd427245b1321d257",
+  "candidateVersion": "0.4.2",
+  "commands": [
+    { "command": "bun install --frozen-lockfile", "elapsedSeconds": 0.01, "maxRssKb": 15660, "exitCode": 0 },
+    { "command": "bun run release:verify", "elapsedSeconds": 0.03, "maxRssKb": 42400, "exitCode": 0 },
+    { "command": "bun run check", "elapsedSeconds": 0.76, "maxRssKb": 262172, "exitCode": 0 },
+    { "command": "bun test", "elapsedSeconds": 4.90, "maxRssKb": 162968, "exitCode": 0 },
+    { "command": "bun run benchmark", "elapsedSeconds": 0.46, "maxRssKb": 108112, "exitCode": 0 },
+    { "command": "bun run build", "elapsedSeconds": 0.54, "maxRssKb": 242136, "exitCode": 0 }
+  ]
+}

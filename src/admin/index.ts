@@ -11,13 +11,19 @@ import {
 } from "fs";
 import { basename, dirname, resolve } from "path";
 import { resolveConfig } from "../config";
-import { openMemoryDatabase } from "../db";
+import { openMemoryDatabase, openReadOnlyMemoryDatabase } from "../db";
+import { hashTuple } from "../hash";
 import {
   createVerifiedBackup,
   restoreVerifiedBackup,
   verifyBackupManifest,
 } from "../db/backup";
 import { acquireMigrationLock, breakMigrationLock } from "../db/migration-lock";
+import {
+  acquireMaintenanceGate,
+  type MaintenanceGate,
+  type MaintenanceRecovery,
+} from "../db/maintenance";
 import { doctorDatabase } from "./doctor";
 import { SCHEMA_VERSION } from "../types";
 import { deriveDocument } from "../retrieval/derived";
@@ -30,25 +36,25 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
 
   if (command === "doctor") {
     requireExistingDatabase(databasePath);
-    const db = new Database(databasePath, { readonly: true });
+    const opened = openReadOnlyMemoryDatabase(databasePath);
     try {
-      return doctorDatabase(db);
+      return doctorDatabase(opened.db);
     } finally {
-      db.close();
+      opened.close();
     }
   }
 
   if (command === "backup" && subcommand !== "prune") {
     requireExistingDatabase(databasePath);
-    const lock = acquireMigrationLock(databasePath, readSchemaVersion(databasePath));
-    const db = new Database(databasePath);
-    try {
-      const version = schemaVersion(db);
-      return createVerifiedBackup(db, databasePath, version, version, PRODUCT_VERSION);
-    } finally {
-      db.close();
-      lock.release();
-    }
+    return withExclusiveMaintenance(databasePath, readSchemaVersion(databasePath), () => {
+      const db = new Database(databasePath);
+      try {
+        const version = schemaVersion(db);
+        return createVerifiedBackup(db, databasePath, version, version, PRODUCT_VERSION);
+      } finally {
+        db.close();
+      }
+    });
   }
 
   if (command === "upgrade") {
@@ -74,13 +80,39 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
       return { dryRun: true, manifest: verified.manifest, targetPath: databasePath };
     }
     if (expectedHash !== verified.manifest.sha256) throw new Error("restore manifest hash mismatch");
-    const lock = acquireMigrationLock(databasePath, verified.manifest.sourceSchema);
-    try {
-      const preservedPath = restoreVerifiedBackup(manifestPath, databasePath, confirmation);
-      return { restored: true, preservedPath, manifest: verified.manifest };
-    } finally {
-      lock.release();
+    const maintenanceOwner = option(argv, "--maintenance-owner");
+    const maintenanceConfirmation = option(argv, "--maintenance-confirm");
+    if ((maintenanceOwner === undefined) !== (maintenanceConfirmation === undefined)) {
+      throw new Error("retained maintenance recovery requires both owner and confirmation");
     }
+    const recovery =
+      maintenanceOwner && maintenanceConfirmation
+        ? {
+            ownerID: maintenanceOwner,
+            confirmation: maintenanceConfirmation,
+          }
+        : undefined;
+    if (
+      recovery &&
+      recovery.confirmation !== "RECOVER_RETAINED_MAINTENANCE_GATE"
+    ) {
+      throw new Error("invalid retained maintenance recovery confirmation");
+    }
+    return withExclusiveMaintenance(
+      databasePath,
+      verified.manifest.sourceSchema,
+      (maintenance) => {
+        const preservedPath = restoreVerifiedBackup(
+          manifestPath,
+          databasePath,
+          confirmation,
+          maintenance,
+          expectedHash,
+        );
+        return { restored: true, preservedPath, manifest: verified.manifest };
+      },
+      recovery as MaintenanceRecovery | undefined,
+    );
   }
 
   if (command === "unlock") {
@@ -100,24 +132,63 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
     try {
       const now = Date.now();
       let queued = 0;
-      const notes = opened.db
-        .query("SELECT * FROM notes WHERE status = 'active' ORDER BY project_id, id")
-        .all() as Array<{
-        id: string;
-        project_id: string;
-        current_revision: number;
-        kind: string;
-        title: string;
-        summary: string;
-        content: string;
-      }>;
+      let purges = 0;
+      const quarantined: Record<string, number> = {};
+      let generation = 0;
       const insert = opened.db.query(`
-        INSERT OR IGNORE INTO index_outbox
-          (backend, operation, project_id, note_id, revision, content_hash,
-           state, attempt_count, available_at, created_at)
-        VALUES (?, 'upsert-note', ?, ?, ?, ?, 'pending', 0, ?, ?)
+        INSERT INTO index_outbox
+          (backend, operation_key, operation, project_id, note_id, revision, content_hash,
+           generation, lease_generation, fence, state, attempt_count, available_at,
+           heartbeat_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'pending', 0, ?, NULL, ?)
       `);
-      opened.db.transaction(() => {
+      opened.db.exec("BEGIN IMMEDIATE");
+      try {
+        generation = (
+          opened.db
+            .query(
+              "SELECT COALESCE(MAX(generation), 0) + 1 AS generation FROM index_outbox WHERE backend = ?",
+            )
+            .get(backend) as { generation: number }
+        ).generation;
+        const projects = opened.db
+          .query("SELECT id FROM projects ORDER BY id")
+          .all() as Array<{ id: string }>;
+        const notes = opened.db
+          .query("SELECT * FROM notes WHERE status = 'active' ORDER BY project_id, id")
+          .all() as Array<{
+          id: string;
+          project_id: string;
+          current_revision: number;
+          kind: string;
+          title: string;
+          summary: string;
+          content: string;
+        }>;
+        for (const project of projects) {
+          const operation = "purge-project" as const;
+          const operationKey = outboxOperationKey(
+            backend,
+            operation,
+            project.id,
+            null,
+            null,
+            null,
+            generation,
+          );
+          purges += insert.run(
+            backend,
+            operationKey,
+            operation,
+            project.id,
+            null,
+            null,
+            null,
+            generation,
+            now,
+            now,
+          ).changes;
+        }
         for (const note of notes) {
           const document = deriveDocument({
             projectID: note.project_id,
@@ -128,18 +199,42 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
             summary: note.summary,
             content: note.content,
           });
-          queued += insert.run(
+          if (!document) {
+            quarantined.derived_document_unavailable =
+              (quarantined.derived_document_unavailable ?? 0) + 1;
+            continue;
+          }
+          const operation = "upsert-note" as const;
+          const operationKey = outboxOperationKey(
             backend,
+            operation,
             note.project_id,
             note.id,
             note.current_revision,
-            document?.contentHash ?? null,
+            document.contentHash,
+            generation,
+          );
+          queued += insert.run(
+            backend,
+            operationKey,
+            operation,
+            note.project_id,
+            note.id,
+            note.current_revision,
+            document.contentHash,
+            generation,
             now,
             now,
           ).changes;
         }
-      })();
-      return { backend, queued };
+        opened.db.exec("COMMIT");
+      } catch (error) {
+        try {
+          opened.db.exec("ROLLBACK");
+        } catch {}
+        throw error;
+      }
+      return { backend, generation, purges, queued, quarantined };
     } finally {
       opened.close();
     }
@@ -166,7 +261,8 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
         .query(
           `UPDATE index_outbox
               SET state = 'pending', available_at = ?, lease_owner = NULL,
-                  lease_expires_at = NULL, last_error_code = NULL
+                  lease_expires_at = NULL, heartbeat_at = NULL,
+                  completed_at = NULL, last_error_code = NULL
             WHERE id = ? AND state = 'dead'`,
         )
         .run(Date.now(), id);
@@ -186,39 +282,41 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
   }
 
   if (command === "backup" && subcommand === "prune") {
-    const entries = backupEntries(databasePath);
-    const root = resolve(`${databasePath}.backup`);
-    const digest = createHash("sha256")
-      .update(
-        `${resolve(databasePath)}\0${root}\n${entries
-          .map(
-            (entry) =>
-              `${basename(entry.manifest)}\0${basename(entry.database)}\0${entry.sha256}\0${entry.size}\0${entry.manifestHash}`,
-          )
-          .join("\n")}`,
-      )
-      .digest("hex");
-    if (option(argv, "--confirm") !== "DELETE_VERIFIED_BACKUPS") {
-      return { dryRun: true, digest, backups: entries };
-    }
-    if (option(argv, "--digest") !== digest) throw new Error("backup prune digest mismatch");
-    const currentEntries = entries.map((entry) => {
-      const current = verifiedBackupEntry(root, entry.manifest);
-      if (
-        current.database !== entry.database ||
-        current.sha256 !== entry.sha256 ||
-        current.size !== entry.size ||
-        current.manifestHash !== entry.manifestHash
-      ) {
-        throw new Error(`backup changed after confirmation: ${basename(entry.manifest)}`);
+    return withExclusiveMaintenance(databasePath, SCHEMA_VERSION, () => {
+      const entries = backupEntries(databasePath);
+      const root = resolve(`${databasePath}.backup`);
+      const digest = createHash("sha256")
+        .update(
+          `${resolve(databasePath)}\0${root}\n${entries
+            .map(
+              (entry) =>
+                `${basename(entry.manifest)}\0${basename(entry.database)}\0${entry.sha256}\0${entry.size}\0${entry.manifestHash}`,
+            )
+            .join("\n")}`,
+        )
+        .digest("hex");
+      if (option(argv, "--confirm") !== "DELETE_VERIFIED_BACKUPS") {
+        return { dryRun: true, digest, backups: entries };
       }
-      return current;
+      if (option(argv, "--digest") !== digest) throw new Error("backup prune digest mismatch");
+      const currentEntries = entries.map((entry) => {
+        const current = verifiedBackupEntry(root, entry.manifest);
+        if (
+          current.database !== entry.database ||
+          current.sha256 !== entry.sha256 ||
+          current.size !== entry.size ||
+          current.manifestHash !== entry.manifestHash
+        ) {
+          throw new Error(`backup changed after confirmation: ${basename(entry.manifest)}`);
+        }
+        return current;
+      });
+      for (const current of currentEntries) {
+        rmSync(current.database, { force: true });
+        rmSync(current.manifest, { force: true });
+      }
+      return { deleted: entries.length, digest };
     });
-    for (const current of currentEntries) {
-      rmSync(current.database, { force: true });
-      rmSync(current.manifest, { force: true });
-    }
-    return { deleted: entries.length, digest };
   }
 
   throw new Error(`unknown admin command: ${argv.join(" ")}`);
@@ -230,6 +328,25 @@ function withDatabase<T>(databasePath: string, action: (db: Database) => T): T {
     return action(opened.db);
   } finally {
     opened.close();
+  }
+}
+
+function withExclusiveMaintenance<T>(
+  databasePath: string,
+  schemaVersion: number,
+  action: (maintenance: MaintenanceGate) => T,
+  recovery?: MaintenanceRecovery,
+): T {
+  const lock = acquireMigrationLock(databasePath, schemaVersion);
+  try {
+    const maintenance = acquireMaintenanceGate(databasePath, recovery);
+    try {
+      return action(maintenance);
+    } finally {
+      maintenance.release();
+    }
+  } finally {
+    lock.release();
   }
 }
 
@@ -303,6 +420,26 @@ function verifiedBackupEntry(root: string, manifest: string): {
     size: verified.manifest.size,
     manifestHash: createHash("sha256").update(bytes).digest("hex"),
   };
+}
+
+function outboxOperationKey(
+  backend: string,
+  operation: "upsert-note" | "delete-note" | "purge-project",
+  projectID: string,
+  noteID: string | null,
+  revision: number | null,
+  contentHash: string | null,
+  generation: number,
+): string {
+  return hashTuple("outbox-operation", 2, [
+    backend,
+    operation,
+    projectID,
+    noteID,
+    revision,
+    contentHash,
+    generation,
+  ]);
 }
 
 if (import.meta.main) {

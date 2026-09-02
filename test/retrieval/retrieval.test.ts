@@ -6,6 +6,7 @@ import { openMemoryDatabase } from "../../src/db";
 import { MemoryStore } from "../../src/store";
 import { RetrievalStore } from "../../src/store/retrieval";
 import { formatUntrustedContext } from "../../src/retrieval/formatter";
+import { deriveDocument } from "../../src/retrieval/derived";
 import type { RetrievalBackend } from "../../src/retrieval/contract";
 
 describe("hybrid retrieval", () => {
@@ -17,6 +18,7 @@ describe("hybrid retrieval", () => {
     const beta = memory.createProject("Beta").project!.projectID;
     const direct = memory.update(alpha, { kind: "fact", title: "alpha token", summary: "alpha token" }).id!;
     const neighbor = memory.update(alpha, { kind: "fact", title: "neighbor", summary: "neighbor" }).id!;
+    const unverified = memory.update(alpha, { kind: "fact", title: "unverified", summary: "unverified" }).id!;
     const other = memory.update(beta, { kind: "fact", title: "alpha leak", summary: "alpha leak" }).id!;
     memory.link(alpha, direct, neighbor, "ABOUT");
     const revision = (
@@ -24,6 +26,10 @@ describe("hybrid retrieval", () => {
         current_revision: number;
       }
     ).current_revision;
+    const row = opened.db.query(
+      "SELECT kind, title, summary, content FROM notes WHERE id = ?",
+    ).get(direct) as { kind: string; title: string; summary: string; content: string };
+    const derived = deriveDocument({ projectID: alpha, noteID: direct, revision, ...row })!;
     const backend: RetrievalBackend = {
       id: "fake",
       async upsert() {},
@@ -36,6 +42,9 @@ describe("hybrid retrieval", () => {
         return [
           { noteID: direct, channel: "semantic", rank: 1, revision: revision + 1 },
           { noteID: other, channel: "semantic", rank: 2 },
+          { noteID: unverified, channel: "semantic", rank: 3 },
+          { noteID: direct, channel: "semantic", rank: 4, revision },
+          { noteID: direct, channel: "semantic", rank: 5, contentHash: derived.contentHash },
         ];
       },
     };
@@ -47,7 +56,7 @@ describe("hybrid retrieval", () => {
       semantic: "on",
     });
     expect(result.cards.map((card) => card.id)).toEqual([direct, neighbor]);
-    expect(result.rejectedBackendHits).toBe(2);
+    expect(result.rejectedBackendHits).toBe(5);
     expect(result.cards.some((card) => card.id === other)).toBe(false);
     opened.close();
     rmSync(directory, { recursive: true, force: true });

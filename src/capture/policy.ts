@@ -15,13 +15,13 @@ export function extractExplicitUserCandidate(text: string): MemoryCandidateV1 | 
   const correction = /\b(?:correction:|instead of|düzeltme:|bunun yerine)\b/i.test(normalized);
   if (!preference && !decision && !correction) return undefined;
   const kind: Kind = preference ? "preference" : "decision";
-  const title = normalized.split(/[\n.!?]/, 1)[0]!.trim().slice(0, 240) || `${kind} memory`;
+  const title = takeHead(normalized.split(/[\n.!?]/, 1)[0]!.trim(), 240) || `${kind} memory`;
   const subjectKey = normalizeSubjectKey(title);
   return {
     kind,
     title,
-    summary: normalized.slice(0, 1_200),
-    content: normalized.slice(0, 4_800),
+    summary: takeHead(normalized, 1_200),
+    content: takeHead(normalized, 4_800),
     subjectKey,
     intent: correction ? "supersede" : "create",
     confidence: correction ? 0.98 : 0.97,
@@ -46,5 +46,20 @@ export function canAutoWrite(
 }
 
 export function normalizeSubjectKey(value: string): string {
-  return value.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US").slice(0, 240);
+  return takeHead(
+    value.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US"),
+    240,
+  );
+}
+
+function takeHead(value: string, maxCharacters: number): string {
+  if (value.length <= maxCharacters) return value;
+  let offset = 0;
+  while (offset < value.length) {
+    const codePoint = value.codePointAt(offset)!;
+    const width = codePoint > 0xffff ? 2 : 1;
+    if (offset + width > maxCharacters) break;
+    offset += width;
+  }
+  return value.slice(0, offset);
 }

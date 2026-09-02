@@ -1,0 +1,12 @@
+$ bun benchmark/run.ts
+{
+  "schema": "agz-memory.benchmark/1",
+  "records": 10000,
+  "queries": 100,
+  "latencyMs": {
+    "p50": 0.6546170000000302,
+    "p95": 0.7889200000000187,
+    "p99": 0.9204310000000078
+  },
+  "semanticBackend": "none"
+}

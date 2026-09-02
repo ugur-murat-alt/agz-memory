@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { openMemoryDatabase } from "../../src/db";
+import { doctorDatabase } from "../../src/admin/doctor";
 import { MemoryStore } from "../../src/store";
 
 describe("note lifecycle", () => {
@@ -53,6 +54,9 @@ describe("note lifecycle", () => {
           .get() as { count: number }
       ).count,
     ).toBe(1);
+    const report = doctorDatabase(opened.db);
+    expect(report.ok).toBe(true);
+    expect(report.failures).not.toContain("orphanedOutboxProjects");
     opened.close();
     rmSync(directory, { recursive: true, force: true });
   });

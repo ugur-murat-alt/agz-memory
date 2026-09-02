@@ -16,16 +16,29 @@ export function formatUntrustedContext(
   const prefix = `${OPEN}${escapeAttribute(projectID)}">\n${HEADER}\n`;
   const suffix = `\n${CLOSE}`;
   const lines: string[] = [];
+  let used = 0;
   for (const card of cards.slice(0, maxCards)) {
-    let line = `[${escapeText(card.kind)}][${escapeText(card.id)}] ${escapeText(card.title)}: ${escapeText(card.summary)}`;
-    const remaining = maxCharacters - prefix.length - suffix.length - lines.join("\n").length - (lines.length ? 1 : 0);
+    const line = `[${escapeText(card.kind)}][${escapeText(card.id)}] ${escapeText(card.title)}: ${escapeText(card.summary)}`;
+    const remaining = maxCharacters - prefix.length - suffix.length - used - (lines.length ? 1 : 0);
     if (remaining <= 0) break;
-    if (line.length > remaining) line = line.slice(0, remaining);
-    if (line.trim()) lines.push(line);
+    const bounded = takeWellFormed(line, remaining);
+    if (bounded.trim()) {
+      lines.push(bounded);
+      used += bounded.length + (lines.length > 1 ? 1 : 0);
+    }
   }
   if (lines.length === 0) return undefined;
-  const output = `${prefix}${lines.join("\n")}${suffix}`;
-  return output.length <= maxCharacters ? output : output.slice(0, maxCharacters);
+  return `${prefix}${lines.join("\n")}${suffix}`;
+}
+
+function takeWellFormed(value: string, maxCharacters: number): string {
+  if (value.length <= maxCharacters) return value;
+  let result = "";
+  for (const character of value) {
+    if (result.length + character.length > maxCharacters) break;
+    result += character;
+  }
+  return result;
 }
 
 function escapeText(value: string): string {

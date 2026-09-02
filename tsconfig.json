@@ -6,7 +6,10 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["bun"]
+    "types": ["bun"],
+    "paths": {
+      "@vaur94/agz-memory/core": ["./src/core.ts"]
+    }
   },
   "include": ["src", "test", "benchmark", "scripts"]
 }

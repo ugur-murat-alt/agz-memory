@@ -2,7 +2,7 @@
 
 [English](backup-restore-runbook.md) | Türkçe
 
-Bu runbook `@vaur94/agz-memory@0.4.1` ve SQLite schema v10 için geçerlidir.
+Bu runbook `@vaur94/agz-memory@0.5.0` ve SQLite schema v11 için geçerlidir.
 
 ## Ön Koşullar
 
@@ -25,19 +25,19 @@ Tahmin edilmiş veya boş bir yolla devam etmeyin.
 Önce salt-okunur sağlık raporu alın:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin doctor
 ```
 
 `ok` değeri `true` olmalıdır. `schemaVersion`, satır sayıları ve değişmez kural
 sayılarını kaydedin. Sonra bağımsız doğrulanmış yedek oluşturup yükseltin:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin backup
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin upgrade --to 10
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin upgrade --to 11
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin doctor
 ```
 
-Veritabanı v10'dan eskiyse yükseltme ayrıca değişiklikten önce doğrulanmış yedek
+Veritabanı v11'den eskiyse yükseltme ayrıca değişiklikten önce doğrulanmış yedek
 oluşturur. Yazdırılan her manifest yolunu ve SHA-256 değerini saklayın. Son rapor
 `ok: false` ise yazıcı başlatmayın.
 
@@ -54,16 +54,16 @@ Manifest formatı `agz-memory-backup/1` olur. `agz-memory-admin restore`, manife
 ile veritabanının aynı yedek dizinindeki normal dosyalar olduğunu doğrular;
 ardından boyut, SHA-256, SQLite bütünlüğü, foreign key ve satır sayılarını denetler.
 
-Final `0.4.1` ön sürüm manifest formatlarını kabul etmez. Böyle bir yedeği onu
+Final `0.5.0` ön sürüm manifest formatlarını kabul etmez. Böyle bir yedeği onu
 oluşturan ön sürümle geri yükleyin, o sürümün doctor kontrolünü çalıştırın ve
-yalnız bundan sonra geri yüklenen veritabanını `0.4.1` ile yükseltin.
+yalnız bundan sonra geri yüklenen veritabanını `0.5.0` ile yükseltin.
 
 ## Geri Yükleme Provası
 
 Tüm yazıcıları kapalı tutun. Önce onay vermeden deneme yapın:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin restore \
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin restore \
   "$OPENCODE_MEMORY_DATABASE_PATH.backup/<backup>.manifest.json"
 ```
 
@@ -71,7 +71,7 @@ bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin restore \
 değerlerini kaydedilen yedekle karşılaştırın. Sonra tam manifest özetini kullanın:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin restore \
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin restore \
   "$OPENCODE_MEMORY_DATABASE_PATH.backup/<backup>.manifest.json" \
   --sha256 <manifest-database-sha256> \
   --confirm RESTORE_DATABASE_FROM_VERIFIED_BACKUP
@@ -84,15 +84,35 @@ veritabanı tüm kontrollerden geçmeden bunu silmeyin.
 ## Geri Yükleme Sonrası Doğrulama
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin doctor
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin capture status
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin outbox status
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin outbox status
 ```
 
 Yalnız MCP sunucusunu başlatın ve salt-okunur `project_list`, `memory_recall` ve
 `memory_read` denemeleri yapın. Proje/not sayılarını manifestle karşılaştırın.
 OpenCode'u ancak bu kontroller geçince yeniden başlatın. Ayrı devreye alma kararı
 verilene kadar eklentiyi `off` tutun.
+
+## Korunan Bakım Kapısı
+
+`<database>.maintenance/owner.json` içindeki `state: recovery-required`, önceki
+bir geri yüklemenin geri alma sonucunu doğrulayamadığını gösterir. Bu kapı
+otomatik kaldırılmaz. Tüm MCP/eklenti süreçlerini durdurun; veritabanını, yan
+dosyaları, kapıyı ve geri yükleme kalıntılarını koruyun; ardından doğrulanmış bir
+yedek seçin. Kayıtlı tam sahip kimliğini yalnız geri yükleme komutunda verin:
+
+```sh
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin restore <manifest> \
+  --sha256 <manifest-sha256> \
+  --confirm RESTORE_DATABASE_FROM_VERIFIED_BACKUP \
+  --maintenance-owner <owner-id> \
+  --maintenance-confirm RECOVER_RETAINED_MAINTENANCE_GATE
+```
+
+Uzak, canlı, bozuk veya başka biçimde doğrulanamayan sahipler engelli kalır.
+Kapıyı elle silmeyin; kurtarma geri yüklemesi kapı dizini kesintisiz yerindeyken
+sahipliği atomik olarak devralır.
 
 ## Eski Geçiş Kilidi
 
@@ -103,7 +123,7 @@ Sahip dosyasındaki PID, makine ve başlangıç zamanını doğrulayın. Yalnız
 kanıtlanan kilidi tam sahip ID'si ve onayla kırın:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin unlock \
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin unlock \
   --owner <owner-id> \
   --confirm BREAK_STALE_MIGRATION_LOCK
 ```
@@ -116,14 +136,14 @@ kanıtıdır; veritabanı doğrulamasını atlama izni değildir.
 İlk komut silme yapmaz ve tam yedek kümesinin özetini döndürür:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin backup prune
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin backup prune
 ```
 
 Listelenen her manifest/veritabanı çiftini inceleyin. Yalnız değişmemiş kümeyi
 silin:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin backup prune \
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin backup prune \
   --digest <dry-run-digest> \
   --confirm DELETE_VERIFIED_BACKUPS
 ```

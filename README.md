@@ -20,7 +20,7 @@ binding and rollout mode are configured.
   project name.
 - Notes can be pinned, linked, superseded, revised, searched, and inspected
   without mixing projects.
-- SQLite schema v10 is the canonical source of truth; optional semantic indexes
+- SQLite schema v11 is the canonical source of truth; optional semantic indexes
   are replaceable derivatives.
 - Destructive project deletion requires the immutable ID, exact current name,
   and a fixed confirmation phrase.
@@ -32,12 +32,12 @@ binding and rollout mode are configured.
 
 | Component | Supported version |
 |---|---|
-| Core and MCP | `0.4.1` |
-| OpenCode plugin | `0.4.1` |
+| Core and MCP | `0.5.0` |
+| OpenCode plugin | `0.5.0` |
 | OpenCode V2 | `0.0.0-beta-18743` |
 | `@opencode-ai/plugin` | `0.0.0-beta-18743` |
 | Bun | `>=1.3.14` |
-| SQLite schema | `10` |
+| SQLite schema | `11` |
 
 The MCP server is not tied to an OpenCode beta. The optional plugin disables
 itself unless the running OpenCode version exactly matches the supported beta.
@@ -47,18 +47,21 @@ itself unless the running OpenCode version exactly matches the supported beta.
 Run the server directly:
 
 ```sh
-bunx @vaur94/agz-memory@0.4.1
+bunx @vaur94/agz-memory@0.5.0
 ```
 
 Or register it in OpenCode V2 under `mcp.servers`:
 
 ```jsonc
 {
+  "skills": [
+    "https://raw.githubusercontent.com/ugur-murat-alt/agz-memory/v0.5.0/skills/"
+  ],
   "mcp": {
     "servers": {
       "agz-memory": {
         "type": "local",
-        "command": ["bunx", "@vaur94/agz-memory@0.4.1"],
+        "command": ["bunx", "@vaur94/agz-memory@0.5.0"],
         "environment": {
           "OPENCODE_MEMORY_DATABASE_PATH": "{env:OPENCODE_MEMORY_DATABASE_PATH}"
         },
@@ -68,6 +71,20 @@ Or register it in OpenCode V2 under `mcp.servers`:
   }
 }
 ```
+
+The npm package contains the versioned `agz-memory` skill catalog, but npm
+installation alone does not make a skill discoverable. The explicit `skills`
+entry above lets OpenCode download and advertise the same workflow lazily. The
+MCP remains fully usable without it because the server supplies concise
+`initialize` instructions and complete tool schemas on every connection.
+
+Installation must not edit `~/.config/opencode/AGENTS.md`. That file is
+user-owned, ambient policy for every project, not an extension installation
+surface. Teams may maintain their own memory policy there, but AGZ Memory does
+not require one. `codemode: false` is intentional for this small fixed catalog:
+it exposes all nine tools directly. If Code Mode is enabled instead, the server
+instructions, tool descriptions, and optional skill still describe the same
+workflow.
 
 The default database is
 `~/.local/share/opencode-memory/memory.sqlite`. Set
@@ -113,7 +130,7 @@ options:
 {
   "plugins": [
     {
-      "package": "@vaur94/agz-memory-plugin@0.4.1",
+      "package": "@vaur94/agz-memory-plugin@0.5.0",
       "options": {
         "mode": "off",
         "autoCreateProjects": false,
@@ -186,11 +203,11 @@ quality, and latency gates.
 The admin CLI reads the same `OPENCODE_MEMORY_DATABASE_PATH`:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin doctor
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin backup
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin upgrade --to 10
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin capture status
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin outbox status
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin upgrade --to 11
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin outbox status
 ```
 
 Upgrades take an exclusive migration lock and create a verified backup before
@@ -199,7 +216,7 @@ restore. Restore and backup deletion use dry-run output plus explicit
 confirmation values; never guess them.
 
 Use [the backup and restore runbook](docs/backup-restore-runbook.md) for a full
-rehearsal. Final `0.4.1` backup manifests use `agz-memory-backup/1`; prerelease
+rehearsal. Final `0.5.0` backup manifests use `agz-memory-backup/1`; prerelease
 manifests must be handled by the prerelease that created them.
 
 ## Security Model
@@ -224,15 +241,19 @@ Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 ```sh
 bun install --frozen-lockfile
 bun run release:verify
-bun test
 bun run check
+bun test
+bun run test:property
+bun run test:stress
+bun run test:restore
+bun run benchmark:gate
 bun run build
-bun run benchmark 10000 100
 npm pack --dry-run --json
 ```
 
 `release:verify` rejects package-version drift, mismatched bilingual sections,
-stale beta pins, and any tracked reintroduction of the retired project name.
+stale release pins, an incomplete AGZ-001 through AGZ-068 resolution table, and
+any tracked reintroduction of the retired project name.
 The test suite covers project isolation, destructive confirmation, migration,
 backup/restore, capture safety, revisions, provenance, FTS, retrieval, outbox,
 and the exact nine-tool MCP surface.
@@ -242,6 +263,8 @@ and the exact nine-tool MCP surface.
 - [Architecture](ARCHITECTURE.md)
 - [Changelog](CHANGELOG.md)
 - [Backup and restore runbook](docs/backup-restore-runbook.md)
+- [Schema 11 contract](docs/schema-v11.md)
+- [Review resolution](docs/review-resolution.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [GitHub repository](https://github.com/ugur-murat-alt/agz-memory)
