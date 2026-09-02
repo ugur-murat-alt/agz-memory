@@ -36,6 +36,7 @@ Required status checks should include every 0.5.0 CI gate rather than only the a
 - Multiprocess stress tests.
 - Restore fault tests.
 - Benchmark gate.
+- Packed install and audit.
 - CodeQL.
 - Dependency review for pull requests.
 

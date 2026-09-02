@@ -3,6 +3,44 @@
 All notable changes to AGZ Memory are recorded here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-09-02
+
+### Added
+
+- Added SQLite schema 11 database identity, exact schema fingerprinting,
+  domain-separated length-prefixed hash tuples, composite tenant foreign keys,
+  and a deterministic lossless schema-10 migration.
+- Added a cross-process maintenance gate with lifetime database leases,
+  no-symlink path checks, streaming verified restore, rollback verification,
+  and deep doctor invariants.
+- Added generated reindex operations with purge-first snapshots, fenced and
+  heartbeat-protected outbox leases, hard backend timeouts, and explicit retry.
+- Added Linux minimum/current Bun, macOS, Windows, property, stress, restore,
+  benchmark, package-install, CodeQL, and dependency-review CI gates.
+
+### Changed
+
+- Advanced capture to `agz-memory.capture/2` with strict kind-specific source
+  identities, UTF-8 byte limits, fail-closed redaction, and idempotency conflict
+  detection.
+- Made canonical note, revision, provenance, supersession, and required outbox
+  mutations share immediate transactions with optimistic revision checks.
+- Bounded plugin reconciliation and history/context probes, preserved turn
+  opt-out across hook order and restart, kept prompt capture from advancing the
+  reconciliation watermark, validated every event against the full binding,
+  and made shutdown independent of hung OpenCode calls.
+- Hardened retrieval with one end-to-end deadline, strict backend parsing,
+  batched canonical validation, deterministic fusion, directed graph handling,
+  and Unicode-safe context limits.
+
+### Security
+
+- Preserved exactly nine MCP tools, fail-closed project isolation, untrusted
+  context envelopes, inert plugin defaults, and semantic backend `none`.
+- Added the complete [AGZ-001 through AGZ-068 resolution record](docs/review-resolution.md).
+- Rejects unsupported databases before permission or journal mutation and
+  serializes administrative backup/prune with active database handles.
+
 ## [0.4.2] - 2026-09-02
 
 ### Added
@@ -93,6 +131,7 @@ All notable changes to AGZ Memory are recorded here. The project follows
 - Preserved the nine-tool MCP interface and project-isolation guarantees while
   establishing the AGZ Memory public packages and repository.
 
+[0.5.0]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.5.0
 [0.4.2]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.4.0

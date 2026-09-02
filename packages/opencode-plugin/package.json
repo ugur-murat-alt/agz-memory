@@ -1,6 +1,6 @@
 {
   "name": "@vaur94/agz-memory-plugin",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Safe automatic memory capture and bounded context injection for OpenCode V2",
   "type": "module",
   "main": "./dist/index.js",
@@ -39,6 +39,6 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "0.0.0-beta-18743",
-    "@vaur94/agz-memory": "0.4.2"
+    "@vaur94/agz-memory": "0.5.0"
   }
 }

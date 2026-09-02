@@ -1,6 +1,6 @@
 {
   "name": "@vaur94/agz-memory",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Project-scoped persistent linked memory MCP server for OpenCode V2",
   "type": "module",
   "main": "./dist/server.js",
@@ -28,6 +28,10 @@
     "CHANGELOG.md",
     "docs/backup-restore-runbook.md",
     "docs/backup-restore-runbook.tr.md",
+    "docs/schema-v11.md",
+    "docs/review-resolution.md",
+    "docs/repository-hardening.md",
+    "docs/adr/*.md",
     "LICENSE"
   ],
   "scripts": {
@@ -35,7 +39,11 @@
     "build": "rm -rf dist && bun build src/index.ts --target bun --format esm --packages external --outfile dist/server.js && bun build src/core.ts --target bun --format esm --packages external --outfile dist/core.js && bun build src/admin/index.ts --target bun --format esm --packages external --outfile dist/admin.js && bunx tsc -p tsconfig.build.json && bun run --cwd packages/opencode-plugin build",
     "check": "bunx tsc --noEmit && bun run types && bun run --cwd packages/opencode-plugin check",
     "test": "bun test",
+    "test:property": "bun test test/security/redaction-property.test.ts",
+    "test:stress": "bun test test/concurrency test/plugin/reconcile-backpressure.test.ts",
+    "test:restore": "bun test test/db/maintenance.test.ts test/db/backup-restore.test.ts test/db/restore-live-writer.test.ts test/db/restore-toctou.test.ts test/db/path-symlink-matrix.test.ts",
     "benchmark": "bun benchmark/run.ts",
+    "benchmark:gate": "bun benchmark/run.ts 10000 100 --gate",
     "release:verify": "bun scripts/verify-release.ts",
     "prepack": "bun run release:verify && bun run check && bun run test && bun run build"
   },
@@ -63,5 +71,10 @@
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
     "zod": "^4.2.0"
-  }
+  },
+  "directories": {
+    "doc": "docs",
+    "test": "test"
+  },
+  "keywords": []
 }

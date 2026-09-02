@@ -20,7 +20,7 @@ bağlam eklemez.
   sınırlandırılır.
 - Notlar projeler karışmadan sabitlenebilir, bağlanabilir, hükümsüz bırakılabilir,
   sürümlenebilir, aranabilir ve incelenebilir.
-- SQLite schema v10 tek yetkili veri kaynağıdır; isteğe bağlı anlamsal indeksler
+- SQLite schema v11 tek yetkili veri kaynağıdır; isteğe bağlı anlamsal indeksler
   yeniden üretilebilir türevlerdir.
 - Yıkıcı proje silme işlemi değişmez ID, güncel ad ve sabit onay ifadesi ister.
 - Yedek manifestleri geri yüklemeden önce satır sayılarını, SQLite bütünlüğünü,
@@ -32,12 +32,12 @@ bağlam eklemez.
 
 | Bileşen | Desteklenen sürüm |
 |---|---|
-| Çekirdek ve MCP | `0.4.2` |
-| OpenCode eklentisi | `0.4.2` |
+| Çekirdek ve MCP | `0.5.0` |
+| OpenCode eklentisi | `0.5.0` |
 | OpenCode V2 | `0.0.0-beta-18743` |
 | `@opencode-ai/plugin` | `0.0.0-beta-18743` |
 | Bun | `>=1.3.14` |
-| SQLite schema | `10` |
+| SQLite schema | `11` |
 
 MCP sunucusu bir OpenCode beta sürümüne bağlı değildir. İsteğe bağlı eklenti,
 çalışan OpenCode sürümü desteklenen beta ile tam eşleşmezse kendini kapatır.
@@ -47,7 +47,7 @@ MCP sunucusu bir OpenCode beta sürümüne bağlı değildir. İsteğe bağlı e
 Sunucuyu doğrudan çalıştırın:
 
 ```sh
-bunx @vaur94/agz-memory@0.4.2
+bunx @vaur94/agz-memory@0.5.0
 ```
 
 Ya da OpenCode V2 içinde `mcp.servers` altına kaydedin:
@@ -55,13 +55,13 @@ Ya da OpenCode V2 içinde `mcp.servers` altına kaydedin:
 ```jsonc
 {
   "skills": [
-    "https://raw.githubusercontent.com/ugur-murat-alt/agz-memory/v0.4.2/skills/"
+    "https://raw.githubusercontent.com/ugur-murat-alt/agz-memory/v0.5.0/skills/"
   ],
   "mcp": {
     "servers": {
       "agz-memory": {
         "type": "local",
-        "command": ["bunx", "@vaur94/agz-memory@0.4.2"],
+        "command": ["bunx", "@vaur94/agz-memory@0.5.0"],
         "environment": {
           "OPENCODE_MEMORY_DATABASE_PATH": "{env:OPENCODE_MEMORY_DATABASE_PATH}"
         },
@@ -132,7 +132,7 @@ ayarlarla ekleyin:
 {
   "plugins": [
     {
-      "package": "@vaur94/agz-memory-plugin@0.4.2",
+      "package": "@vaur94/agz-memory-plugin@0.5.0",
       "options": {
         "mode": "off",
         "autoCreateProjects": false,
@@ -205,11 +205,11 @@ kapılarından geçene kadar `semanticBackend` değeri `none` olmalıdır.
 Yönetim aracı aynı `OPENCODE_MEMORY_DATABASE_PATH` değerini okur:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin doctor
-bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin backup
-bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin upgrade --to 10
-bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin capture status
-bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin outbox status
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin upgrade --to 11
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.5.0 agz-memory-admin outbox status
 ```
 
 Yükseltmeler özel bir geçiş kilidi alır ve veritabanını değiştirmeden önce
@@ -218,7 +218,7 @@ dener. Geri yükleme ve yedek silme işlemleri önce deneme çıktısı, sonra a
 onay değerleri ister; bu değerleri tahmin etmeyin.
 
 Tam prova için [yedekleme ve geri yükleme runbook'unu](docs/backup-restore-runbook.tr.md)
-kullanın. Final `0.4.2` yedek manifestleri `agz-memory-backup/1` kullanır;
+kullanın. Final `0.5.0` yedek manifestleri `agz-memory-backup/1` kullanır;
 ön sürüm manifestleri onları oluşturan ön sürümle işlenmelidir.
 
 ## Güvenlik Modeli
@@ -243,16 +243,19 @@ Güvenlik açıklarını [SECURITY.md](SECURITY.md) içindeki özel kanaldan bil
 ```sh
 bun install --frozen-lockfile
 bun run release:verify
-bun test
 bun run check
+bun test
+bun run test:property
+bun run test:stress
+bun run test:restore
+bun run benchmark:gate
 bun run build
-bun run benchmark 10000 100
 npm pack --dry-run --json
 ```
 
 `release:verify`; paket sürümü sapmasını, iki dildeki bölüm uyuşmazlığını, eski
-beta pinlerini ve kullanımdan kaldırılan proje adının tracked dosyalara yeniden
-girmesini reddeder. Testler proje izolasyonu, yıkıcı onay, schema geçişi,
+sürüm pinlerini, eksik AGZ-001 ile AGZ-068 çözüm tablosunu ve kullanımdan
+kaldırılan proje adının tracked dosyalara yeniden girmesini reddeder. Testler proje izolasyonu, yıkıcı onay, schema geçişi,
 yedekleme/geri yükleme, yakalama güvenliği, revision, provenance, FTS, geri
 çağırma, outbox ve tam dokuz araçlı MCP yüzeyini kapsar.
 
@@ -261,6 +264,8 @@ yedekleme/geri yükleme, yakalama güvenliği, revision, provenance, FTS, geri
 - [Mimari](ARCHITECTURE.md)
 - [Değişiklik günlüğü](CHANGELOG.md)
 - [Yedekleme ve geri yükleme runbook'u](docs/backup-restore-runbook.tr.md)
+- [Schema 11 sözleşmesi](docs/schema-v11.md)
+- [İnceleme çözümleri](docs/review-resolution.md)
 - [Katkı rehberi](CONTRIBUTING.md)
 - [Güvenlik politikası](SECURITY.md)
 - [GitHub deposu](https://github.com/ugur-murat-alt/agz-memory)
