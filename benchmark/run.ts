@@ -7,6 +7,7 @@ import { RetrievalStore } from "../src/store/retrieval";
 
 const size = Number(process.argv[2] ?? 10_000);
 const queryCount = Number(process.argv[3] ?? 100);
+const gate = process.argv.includes("--gate");
 if (!Number.isInteger(size) || size < 1 || size > 100_000) throw new Error("size must be 1..100000");
 if (!Number.isInteger(queryCount) || queryCount < 1 || queryCount > 1_000) {
   throw new Error("query count must be 1..1000");
@@ -51,6 +52,12 @@ for (let index = 0; index < queryCount; index++) {
 }
 samples.sort((a, b) => a - b);
 const percentile = (value: number) => samples[Math.min(samples.length - 1, Math.ceil(samples.length * value) - 1)]!;
+const p50 = percentile(0.5);
+const p95 = percentile(0.95);
+const p99 = percentile(0.99);
+if (gate && p99 > 5) {
+  throw new Error(`benchmark p99 ${p99.toFixed(3)} ms exceeds 5 ms gate`);
+}
 process.stdout.write(
   `${JSON.stringify(
     {
@@ -58,9 +65,9 @@ process.stdout.write(
       records: size,
       queries: queryCount,
       latencyMs: {
-        p50: percentile(0.5),
-        p95: percentile(0.95),
-        p99: percentile(0.99),
+        p50,
+        p95,
+        p99,
       },
       semanticBackend: "none",
     },

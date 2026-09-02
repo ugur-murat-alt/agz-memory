@@ -1,4 +1,4 @@
-import type { RetrievalBackend } from "./retrieval/contract";
+import type { OutboxBackend, RetrievalBackend } from "./retrieval/contract";
 import { openMemoryDatabase, type OpenedDB } from "./db";
 import { CaptureStore } from "./store/capture";
 import { MemoryStore } from "./store";
@@ -8,7 +8,7 @@ import { RetrievalStore } from "./store/retrieval";
 export interface MemoryCoreOptions {
   indexBackends?: readonly string[];
   retrievalBackend?: RetrievalBackend;
-  outboxBackends?: ReadonlyMap<string, RetrievalBackend>;
+  outboxBackends?: ReadonlyMap<string, OutboxBackend>;
 }
 
 export class MemoryCore {

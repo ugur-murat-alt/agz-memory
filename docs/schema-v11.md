@@ -57,7 +57,7 @@ Partial unique indexes prevent duplicate active upsert, delete, purge, and reind
 
 ## Reindex
 
-Each reindex command creates a durable job and generation. Every selected project queues one purge before bounded active-note upserts. Progress, digest, state, and cursor are persisted. A repeated reindex uses a new generation and is not blocked by old succeeded rows. Quarantined derived documents are omitted after purge and counted by reason code.
+Each reindex command transactionally creates a new generation of durable outbox operations. Every selected project queues one purge before its bounded active-note upserts. Progress is represented by the persisted outbox states. A repeated reindex uses a new generation and is not blocked by old succeeded rows. Quarantined derived documents are omitted after purge and counted by reason code.
 
 ## Migration From Schema 10
 
@@ -70,6 +70,6 @@ Before migration, AGZ Memory creates and verifies one source-schema-10 backup wh
 5. Verifies row counts, foreign keys, current-revision agreement, hashes, FTS, application identity, and the exact schema fingerprint.
 6. Publishes version 11 only after all checks pass.
 
-Cross-project, malformed, or ambiguous legacy rows stop migration. No record is silently dropped or normalized. The error identifies only the safe table/row identity and an error code; the verified backup path is included in the operator-facing migration report.
+Cross-project, malformed, or ambiguous legacy rows stop migration. Documented compatibility normalization resets checkpoint watermarks, canonicalizes retained payloadless capture identities, and repairs valid historical outbox tombstone fields without dropping rows. The error identifies only the safe table/row identity and an error code; the verified backup path is included in the operator-facing migration report.
 
 Reopening a valid schema 11 database is idempotent and does not execute `CREATE IF NOT EXISTS`. A 0.4.1 binary observes version 11 and rejects it as newer before writing application DDL.

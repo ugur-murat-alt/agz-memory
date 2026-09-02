@@ -26,7 +26,7 @@ describe("verified restore source identity", () => {
         summary: "original",
         content: "original",
       });
-      backup = createVerifiedBackup(target.db, targetPath, 10, 10, "test");
+      backup = createVerifiedBackup(target.db, targetPath, 11, 11, "test");
       target.close();
       targetClosed = true;
 

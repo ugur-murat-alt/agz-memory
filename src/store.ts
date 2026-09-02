@@ -1,8 +1,12 @@
 import { randomUUID } from "crypto";
 import type { Database } from "bun:sqlite";
-import { cleanProjectName, normalizeProjectName, validateProjectName } from "./project";
+import {
+  cleanProjectName,
+  normalizeProjectName,
+  validateProjectName,
+} from "./project";
 import { INLINE_LIMIT, KINDS, PREDICATES } from "./types";
-import { noteContentHash } from "./db/migrations/v009";
+import { hashTuple, noteContentHash } from "./hash";
 import { deriveDocument } from "./retrieval/derived";
 import type {
   Edge,
@@ -44,16 +48,22 @@ export class MemoryStore {
     private indexBackends: readonly string[] = [],
   ) {}
 
-  resolveProject(selector: ProjectSelector): { ok: boolean; project?: Project; reason?: string } {
+  resolveProject(selector: ProjectSelector): {
+    ok: boolean;
+    project?: Project;
+    reason?: string;
+  } {
     const row = selector.projectID
       ? this.getProjectRow(selector.projectID)
       : selector.projectName
         ? (this.db
             .query("SELECT * FROM projects WHERE normalized_name = ?")
-            .get(normalizeProjectName(selector.projectName)) as ProjectRow | undefined)
+            .get(normalizeProjectName(selector.projectName)) as
+            ProjectRow | undefined)
         : undefined;
     if (!row) {
-      const reference = selector.projectID ?? selector.projectName ?? "missing selector";
+      const reference =
+        selector.projectID ?? selector.projectName ?? "missing selector";
       return { ok: false, reason: `project ${reference} not found` };
     }
     return { ok: true, project: rowToProject(row) };
@@ -70,7 +80,9 @@ export class MemoryStore {
           GROUP BY p.id
           ORDER BY p.normalized_name`,
       )
-      .all() as Array<ProjectRow & { note_count: number; pinned_count: number }>;
+      .all() as Array<
+      ProjectRow & { note_count: number; pinned_count: number }
+    >;
     return rows.map((row) => ({
       ...rowToProject(row),
       noteCount: row.note_count,
@@ -78,7 +90,11 @@ export class MemoryStore {
     }));
   }
 
-  createProject(nameValue: string): { ok: boolean; project?: Project; reason?: string } {
+  createProject(nameValue: string): {
+    ok: boolean;
+    project?: Project;
+    reason?: string;
+  } {
     const reason = validateProjectName(nameValue);
     if (reason) return { ok: false, reason };
     const name = cleanProjectName(nameValue);
@@ -88,15 +104,36 @@ export class MemoryStore {
     }
     const id = randomUUID();
     const now = Date.now();
-    this.db.query(
-      "INSERT INTO projects (id, name, normalized_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-    ).run(id, name, normalizedName, now, now);
-    return { ok: true, project: { projectID: id, projectName: name, createdAt: now, updatedAt: now } };
+    try {
+      const row = this.immediateTransaction(
+        () =>
+          this.db
+            .query(
+              "INSERT INTO projects (id, name, normalized_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?) RETURNING *",
+            )
+            .get(id, name, normalizedName, now, now) as ProjectRow | undefined,
+      );
+      if (!row) throw new Error("project insert returned no row");
+      return { ok: true, project: rowToProject(row) };
+    } catch (error) {
+      const committed = this.getProjectByNormalizedName(normalizedName);
+      if (committed) {
+        return {
+          ok: false,
+          reason: `project name already exists: ${committed.name}`,
+        };
+      }
+      throw error;
+    }
   }
 
-  updateProject(projectID: string, nameValue: string): { ok: boolean; project?: Project; reason?: string } {
+  updateProject(
+    projectID: string,
+    nameValue: string,
+  ): { ok: boolean; project?: Project; reason?: string } {
     const existing = this.getProjectRow(projectID);
-    if (!existing) return { ok: false, reason: `project ${projectID} not found` };
+    if (!existing)
+      return { ok: false, reason: `project ${projectID} not found` };
     const reason = validateProjectName(nameValue);
     if (reason) return { ok: false, reason };
     const name = cleanProjectName(nameValue);
@@ -108,13 +145,29 @@ export class MemoryStore {
       return { ok: false, reason: `project name already exists: ${name}` };
     }
     const now = Date.now();
-    this.db
-      .query("UPDATE projects SET name = ?, normalized_name = ?, updated_at = ? WHERE id = ?")
-      .run(name, normalizedName, now, projectID);
-    return {
-      ok: true,
-      project: { projectID, projectName: name, createdAt: existing.created_at, updatedAt: now },
-    };
+    try {
+      const updated = this.immediateTransaction(
+        () =>
+          this.db
+            .query(
+              "UPDATE projects SET name = ?, normalized_name = ?, updated_at = ? WHERE id = ? RETURNING *",
+            )
+            .get(name, normalizedName, now, projectID) as
+            ProjectRow | undefined,
+      );
+      if (!updated)
+        return { ok: false, reason: `project ${projectID} not found` };
+      return { ok: true, project: rowToProject(updated) };
+    } catch (error) {
+      const committed = this.getProjectByNormalizedName(normalizedName);
+      if (committed && committed.id !== projectID) {
+        return {
+          ok: false,
+          reason: `project name already exists: ${committed.name}`,
+        };
+      }
+      throw error;
+    }
   }
 
   deleteProject(
@@ -128,76 +181,148 @@ export class MemoryStore {
     deletedCounts?: { notes: number; edges: number; pinned: number };
     reason?: string;
   } {
-    const project = this.getProjectRow(projectID);
-    if (!project) return { ok: false, reason: `project ${projectID} not found` };
-    if (confirmProjectName !== project.name) {
-      return { ok: false, reason: "confirmProjectName must exactly match the current project name" };
+    const initialProject = this.getProjectRow(projectID);
+    if (!initialProject)
+      return { ok: false, reason: `project ${projectID} not found` };
+    if (confirmProjectName !== initialProject.name) {
+      return {
+        ok: false,
+        reason:
+          "confirmProjectName must exactly match the current project name",
+      };
     }
 
-    const counts = this.db
-      .query(
-        `SELECT
-           (SELECT COUNT(*) FROM notes WHERE project_id = ?) AS notes,
-           (SELECT COUNT(*) FROM note_edges WHERE project_id = ?) AS edges,
-           (SELECT COUNT(*) FROM notes WHERE project_id = ? AND pinned = 1) AS pinned`,
-      )
-      .get(projectID, projectID, projectID) as { notes: number; edges: number; pinned: number };
-
-    this.db.transaction(() => {
-      for (const backend of this.indexBackends) {
-        this.enqueueOutbox(backend, "purge-project", projectID, null, null, null);
+    return this.immediateTransaction(() => {
+      const project = this.getProjectRow(projectID);
+      if (!project)
+        return { ok: false, reason: `project ${projectID} not found` };
+      if (project.name !== confirmProjectName) {
+        return {
+          ok: false,
+          reason:
+            "confirmProjectName must exactly match the current project name",
+        };
       }
-      this.db.query("DELETE FROM projects WHERE id = ?").run(projectID);
-    })();
-    return {
-      ok: true,
-      deleted: true,
-      projectID,
-      projectName: project.name,
-      deletedCounts: counts,
-    };
+      const counts = this.db
+        .query(
+          `SELECT
+             (SELECT COUNT(*) FROM notes WHERE project_id = ?) AS notes,
+             (SELECT COUNT(*) FROM note_edges WHERE project_id = ?) AS edges,
+             (SELECT COUNT(*) FROM notes WHERE project_id = ? AND pinned = 1) AS pinned`,
+        )
+        .get(projectID, projectID, projectID) as {
+        notes: number;
+        edges: number;
+        pinned: number;
+      };
+      const now = Date.now();
+      for (const backend of this.indexBackends) {
+        this.enqueueOutbox(
+          backend,
+          "purge-project",
+          project.id,
+          null,
+          null,
+          null,
+          now,
+        );
+      }
+      const deleted = this.db
+        .query(
+          "DELETE FROM projects WHERE id = ? AND name = ? RETURNING id, name",
+        )
+        .get(projectID, confirmProjectName) as DeletedProjectRow | undefined;
+      if (!deleted)
+        return {
+          ok: false,
+          reason:
+            "confirmProjectName must exactly match the current project name",
+        };
+      return {
+        ok: true,
+        deleted: true,
+        projectID: deleted.id,
+        projectName: deleted.name,
+        deletedCounts: counts,
+      };
+    });
   }
 
   update(projectID: string, input: UpdateInput): UpdateResult {
     const project = this.getProjectRow(projectID);
-    if (!project) return { ok: false, reason: `project ${projectID} not found` };
+    if (!project)
+      return { ok: false, reason: `project ${projectID} not found` };
     if (input.delete) {
       if (!input.id) return { ok: false, reason: "id is required for delete" };
       const id = input.id;
       const existing = this.getNoteRow(projectID, id);
-      if (!existing) return { ok: false, reason: `note ${id} not found in project ${project.name}` };
-      this.db.transaction(() => {
+      if (!existing)
+        return {
+          ok: false,
+          reason: `note ${id} not found in project ${project.name}`,
+        };
+      return this.immediateTransaction(() => {
+        const deleted = this.db
+          .query(
+            "DELETE FROM notes WHERE project_id = ? AND id = ? AND status = 'active' RETURNING *",
+          )
+          .get(projectID, id) as NoteStorageRow | undefined;
+        if (!deleted) {
+          const current = this.getNoteRow(projectID, id);
+          return current
+            ? { ok: false, reason: `note is ${current.status}` }
+            : {
+                ok: false,
+                reason: `note ${id} not found in project ${project.name}`,
+              };
+        }
+        const now = Date.now();
         for (const backend of this.indexBackends) {
           this.enqueueOutbox(
             backend,
             "delete-note",
-            projectID,
-            id,
-            existing.current_revision,
-            existing.content_hash,
+            deleted.project_id,
+            deleted.id,
+            deleted.current_revision,
+            null,
+            now,
           );
         }
-        this.db.query("DELETE FROM notes WHERE project_id = ? AND id = ?").run(projectID, id);
-      })();
-      return { ok: true, id, projectID, projectName: project.name, deleted: true };
+        return {
+          ok: true,
+          id: deleted.id,
+          projectID,
+          projectName: project.name,
+          deleted: true,
+        };
+      });
     }
 
-    const existing = input.id ? this.getNoteRow(projectID, input.id) : undefined;
+    const existing = input.id
+      ? this.getNoteRow(projectID, input.id)
+      : undefined;
     if (input.id && !existing) {
-      return { ok: false, reason: `note ${input.id} not found in project ${project.name}` };
+      return {
+        ok: false,
+        reason: `note ${input.id} not found in project ${project.name}`,
+      };
     }
     if (existing && existing.status !== "active") {
       return { ok: false, reason: `note is ${existing.status}` };
     }
 
     const kindValue = input.kind ?? existing?.kind;
-    const kind = (KINDS as readonly string[]).includes(kindValue ?? "") ? (kindValue as Kind) : null;
-    if (!kind) return { ok: false, reason: `kind must be one of: ${KINDS.join(", ")}` };
-    const title = (input.title ?? existing?.title ?? "").trim();
-    const summary = (input.summary ?? existing?.summary ?? "").trim();
-    const content = (input.content ?? existing?.content ?? summary).trim();
+    const kind = (KINDS as readonly string[]).includes(kindValue ?? "")
+      ? (kindValue as Kind)
+      : null;
+    if (!kind)
+      return { ok: false, reason: `kind must be one of: ${KINDS.join(", ")}` };
+    const title = input.title === undefined ? existing?.title ?? "" : input.title.trim();
+    const summary = input.summary === undefined ? existing?.summary ?? "" : input.summary.trim();
+    const content = input.content === undefined ? existing?.content ?? summary : input.content.trim();
     if (!title) return { ok: false, reason: "title is required" };
-    if (title.length > 240) return { ok: false, reason: "title exceeds 240 characters" };
+    if (title.length > 240)
+      return { ok: false, reason: "title exceeds 240 characters" };
     if (!summary) return { ok: false, reason: "summary is required" };
     if (!content) return { ok: false, reason: "content is empty" };
 
@@ -212,84 +337,219 @@ export class MemoryStore {
         existing.content === content &&
         existing.size_class === sizeClass
       ) {
-        return { ok: true, id: existing.id, projectID, projectName: project.name, sizeClass };
-      }
-      this.db.transaction(() => {
-        this.db.query(
-          `UPDATE notes
-              SET kind = ?, title = ?, summary = ?, content = ?, size_class = ?,
-                  current_revision = current_revision + 1, content_hash = ?, updated_at = ?
-            WHERE project_id = ? AND id = ?`,
-        ).run(kind, title, summary, content, sizeClass, contentHash, now, projectID, existing.id);
-        this.recordCurrentRevision(projectID, existing.id, "mcp-manual", now);
-        const revision = existing.current_revision + 1;
-        const derivedHash = deriveDocument({
+        const unchanged = this.immediateTransaction(() =>
+          this.db
+            .query(
+              `SELECT * FROM notes
+                WHERE project_id = ? AND id = ? AND current_revision = ? AND status = 'active'
+                  AND kind = ? AND title = ? AND summary = ? AND content = ? AND size_class = ?`,
+            )
+            .get(
+              projectID,
+              existing.id,
+              existing.current_revision,
+              kind,
+              title,
+              summary,
+              content,
+              sizeClass,
+            ) as NoteStorageRow | undefined,
+        );
+        if (!unchanged) {
+          return {
+            ok: false,
+            id: existing.id,
+            projectID,
+            projectName: project.name,
+            reason: "revision_conflict",
+          };
+        }
+        return {
+          ok: true,
+          id: existing.id,
           projectID,
-          noteID: existing.id,
-          revision,
-          kind,
-          title,
-          summary,
-          content,
-        })?.contentHash ?? null;
-        for (const backend of this.indexBackends) {
-          this.enqueueOutbox(
-            backend,
-            "upsert-note",
+          projectName: project.name,
+          sizeClass,
+        };
+      }
+      const subjectKey =
+        existing.kind === kind && existing.title === title
+          ? existing.subject_key
+          : null;
+      const committed = this.immediateTransaction(() => {
+        const updated = this.db
+          .query(
+            `UPDATE notes
+                SET kind = ?, title = ?, summary = ?, content = ?, size_class = ?, subject_key = ?,
+                    current_revision = current_revision + 1, content_hash = ?, updated_at = ?
+              WHERE project_id = ? AND id = ? AND current_revision = ? AND status = 'active'
+              RETURNING *`,
+          )
+          .get(
+            kind,
+            title,
+            summary,
+            content,
+            sizeClass,
+            subjectKey,
+            contentHash,
+            now,
             projectID,
             existing.id,
-            revision,
-            derivedHash,
-          );
+            existing.current_revision,
+          ) as NoteStorageRow | undefined;
+        if (!updated) return undefined;
+        this.recordCurrentRevision(updated, "mcp-manual", now);
+        const derived = deriveDocument({
+          projectID: updated.project_id,
+          noteID: updated.id,
+          revision: updated.current_revision,
+          kind: updated.kind,
+          title: updated.title,
+          summary: updated.summary,
+          content: updated.content,
+        });
+        if (derived) {
+          for (const backend of this.indexBackends) {
+            this.enqueueOutbox(
+              backend,
+              "upsert-note",
+              updated.project_id,
+              updated.id,
+              updated.current_revision,
+              derived.contentHash,
+              now,
+            );
+          }
         }
-      })();
-      return { ok: true, id: existing.id, projectID, projectName: project.name, sizeClass };
+        return updated;
+      });
+      if (!committed) {
+        return {
+          ok: false,
+          id: existing.id,
+          projectID,
+          projectName: project.name,
+          reason: "revision_conflict",
+        };
+      }
+      return {
+        ok: true,
+        id: committed.id,
+        projectID,
+        projectName: project.name,
+        sizeClass: committed.size_class,
+      };
     }
     const id = randomUUID();
-    this.insertNote(id, projectID, kind, title, summary, content, sizeClass, null, null, now);
-    return { ok: true, id, projectID, projectName: project.name, sizeClass };
+    const committed = this.insertNote(
+      id,
+      projectID,
+      kind,
+      title,
+      summary,
+      content,
+      sizeClass,
+      null,
+      null,
+      now,
+    );
+    return {
+      ok: true,
+      id: committed.id,
+      projectID,
+      projectName: project.name,
+      sizeClass: committed.size_class,
+    };
   }
 
   pin(projectID: string, id: string, pinned: boolean) {
     const project = this.getProjectRow(projectID);
-    if (!project) return { ok: false, reason: `project ${projectID} not found` };
+    if (!project)
+      return { ok: false, reason: `project ${projectID} not found` };
     const note = this.getNoteRow(projectID, id);
-    if (!note) return { ok: false, reason: `note ${id} not found in project ${project.name}` };
-    if (note.status !== "active") return { ok: false, reason: `note is ${note.status}` };
+    if (!note)
+      return {
+        ok: false,
+        reason: `note ${id} not found in project ${project.name}`,
+      };
+    if (note.status !== "active")
+      return { ok: false, reason: `note is ${note.status}` };
     if (note.pinned === (pinned ? 1 : 0)) {
+      const unchanged = this.immediateTransaction(() =>
+        this.db
+          .query(
+            `SELECT * FROM notes
+              WHERE project_id = ? AND id = ? AND current_revision = ?
+                AND status = 'active' AND pinned = ?`,
+          )
+          .get(projectID, id, note.current_revision, pinned ? 1 : 0) as
+          NoteStorageRow | undefined,
+      );
+      if (!unchanged) {
+        return {
+          ok: false,
+          id,
+          projectID,
+          projectName: project.name,
+          reason: "revision_conflict",
+        };
+      }
       return { ok: true, id, projectID, projectName: project.name, pinned };
     }
     const now = Date.now();
-    this.db.transaction(() => {
-      this.db
+    const committed = this.immediateTransaction(() => {
+      const updated = this.db
         .query(
           `UPDATE notes
               SET pinned = ?, current_revision = current_revision + 1, updated_at = ?
-            WHERE project_id = ? AND id = ?`,
+            WHERE project_id = ? AND id = ? AND current_revision = ? AND status = 'active'
+            RETURNING *`,
         )
-        .run(pinned ? 1 : 0, now, projectID, id);
-      this.recordCurrentRevision(projectID, id, "mcp-manual", now);
-      const derivedHash = deriveDocument({
-        projectID,
-        noteID: id,
-        revision: note.current_revision + 1,
-        kind: note.kind,
-        title: note.title,
-        summary: note.summary,
-        content: note.content,
-      })?.contentHash ?? null;
-      for (const backend of this.indexBackends) {
-        this.enqueueOutbox(
-          backend,
-          "upsert-note",
-          projectID,
-          id,
-          note.current_revision + 1,
-          derivedHash,
-        );
+        .get(pinned ? 1 : 0, now, projectID, id, note.current_revision) as
+        NoteStorageRow | undefined;
+      if (!updated) return undefined;
+      this.recordCurrentRevision(updated, "mcp-manual", now);
+      const derived = deriveDocument({
+        projectID: updated.project_id,
+        noteID: updated.id,
+        revision: updated.current_revision,
+        kind: updated.kind,
+        title: updated.title,
+        summary: updated.summary,
+        content: updated.content,
+      });
+      if (derived) {
+        for (const backend of this.indexBackends) {
+          this.enqueueOutbox(
+            backend,
+            "upsert-note",
+            updated.project_id,
+            updated.id,
+            updated.current_revision,
+            derived.contentHash,
+            now,
+          );
+        }
       }
-    })();
-    return { ok: true, id, projectID, projectName: project.name, pinned };
+      return updated;
+    });
+    if (!committed) {
+      return {
+        ok: false,
+        id,
+        projectID,
+        projectName: project.name,
+        reason: "revision_conflict",
+      };
+    }
+    return {
+      ok: true,
+      id: committed.id,
+      projectID,
+      projectName: project.name,
+      pinned: committed.pinned === 1,
+    };
   }
 
   private insertNote(
@@ -303,17 +563,18 @@ export class MemoryStore {
     supersedesID: string | null,
     subjectKey: string | null,
     now: number,
-  ) {
+  ): NoteStorageRow {
     const contentHash = noteContentHash(kind, title, summary, content);
-    this.db.transaction(() => {
-      this.db
+    return this.immediateTransaction(() => {
+      const note = this.db
         .query(
           `INSERT INTO notes
              (id, project_id, kind, title, summary, content, size_class, pinned, status,
               supersedes_id, current_revision, subject_key, content_hash, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, 1, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, 1, ?, ?, ?, ?)
+           RETURNING *`,
         )
-        .run(
+        .get(
           id,
           projectID,
           kind,
@@ -326,24 +587,39 @@ export class MemoryStore {
           contentHash,
           now,
           now,
-        );
-      this.recordCurrentRevision(projectID, id, "mcp-manual", now);
-      const derivedHash = deriveDocument({
-        projectID,
-        noteID: id,
-        revision: 1,
-        kind,
-        title,
-        summary,
-        content,
-      })?.contentHash ?? null;
-      for (const backend of this.indexBackends) {
-        this.enqueueOutbox(backend, "upsert-note", projectID, id, 1, derivedHash);
+        ) as NoteStorageRow | undefined;
+      if (!note) throw new Error(`note ${id} insert returned no row`);
+      this.recordCurrentRevision(note, "mcp-manual", now);
+      const derived = deriveDocument({
+        projectID: note.project_id,
+        noteID: note.id,
+        revision: note.current_revision,
+        kind: note.kind,
+        title: note.title,
+        summary: note.summary,
+        content: note.content,
+      });
+      if (derived) {
+        for (const backend of this.indexBackends) {
+          this.enqueueOutbox(
+            backend,
+            "upsert-note",
+            note.project_id,
+            note.id,
+            note.current_revision,
+            derived.contentHash,
+            now,
+          );
+        }
       }
-    })();
+      return note;
+    });
   }
 
-  read(projectID: string, id: string): { note?: Note; edges?: Edge[]; reason?: string } {
+  read(
+    projectID: string,
+    id: string,
+  ): { note?: Note; edges?: Edge[]; reason?: string } {
     const row = this.getNoteRow(projectID, id);
     if (!row) return { reason: `note ${id} not found in project ${projectID}` };
     const edges = this.db
@@ -360,23 +636,45 @@ export class MemoryStore {
     };
   }
 
-  link(projectID: string, sourceID: string, targetID: string, predicate: string) {
+  link(
+    projectID: string,
+    sourceID: string,
+    targetID: string,
+    predicate: string,
+  ) {
     const project = this.getProjectRow(projectID);
-    if (!project) return { ok: false, reason: `project ${projectID} not found` };
+    if (!project)
+      return { ok: false, reason: `project ${projectID} not found` };
     if (!(PREDICATES as readonly string[]).includes(predicate)) {
-      return { ok: false, reason: `predicate must be one of: ${PREDICATES.join(", ")}` };
+      return {
+        ok: false,
+        reason: `predicate must be one of: ${PREDICATES.join(", ")}`,
+      };
     }
-    if (sourceID === targetID) return { ok: false, reason: "cannot link a note to itself" };
+    if (sourceID === targetID)
+      return { ok: false, reason: "cannot link a note to itself" };
     for (const id of [sourceID, targetID]) {
       const row = this.getNoteRow(projectID, id);
-      if (!row) return { ok: false, reason: `note ${id} not found in project ${project.name}` };
-      if (row.status !== "active") return { ok: false, reason: `note ${id} is ${row.status}` };
+      if (!row)
+        return {
+          ok: false,
+          reason: `note ${id} not found in project ${project.name}`,
+        };
+      if (row.status !== "active")
+        return { ok: false, reason: `note ${id} is ${row.status}` };
     }
     this.db
       .query(
         "INSERT OR IGNORE INTO note_edges (id, project_id, source_id, target_id, predicate, created_at) VALUES (?, ?, ?, ?, ?, ?)",
       )
-      .run(randomUUID(), projectID, sourceID, targetID, predicate as Predicate, Date.now());
+      .run(
+        randomUUID(),
+        projectID,
+        sourceID,
+        targetID,
+        predicate as Predicate,
+        Date.now(),
+      );
     return { ok: true, projectID, projectName: project.name };
   }
 
@@ -398,7 +696,9 @@ export class MemoryStore {
           ORDER BY n.pinned DESC, rank
           LIMIT ?`,
       )
-      .all(tokens.join(" OR "), projectID, limit) as Array<NoteRow & { rank: number }>;
+      .all(tokens.join(" OR "), projectID, limit) as Array<
+      NoteRow & { rank: number }
+    >;
 
     const cards = matches.map((row) => toCard(rowToNote(row), "match"));
     const seen = new Set(cards.map((card) => card.id));
@@ -431,15 +731,31 @@ export class MemoryStore {
   }
 
   private getProjectRow(id: string): ProjectRow | undefined {
-    return this.db.query("SELECT * FROM projects WHERE id = ?").get(id) as ProjectRow | undefined;
+    return this.db.query("SELECT * FROM projects WHERE id = ?").get(id) as
+      ProjectRow | undefined;
   }
 
-  private projectNameExists(normalizedName: string, excludingID?: string): boolean {
+  private getProjectByNormalizedName(
+    normalizedName: string,
+  ): ProjectRow | undefined {
+    return this.db
+      .query("SELECT * FROM projects WHERE normalized_name = ?")
+      .get(normalizedName) as ProjectRow | undefined;
+  }
+
+  private projectNameExists(
+    normalizedName: string,
+    excludingID?: string,
+  ): boolean {
     const row = excludingID
       ? this.db
-          .query("SELECT id FROM projects WHERE normalized_name = ? AND id != ?")
+          .query(
+            "SELECT id FROM projects WHERE normalized_name = ? AND id != ?",
+          )
           .get(normalizedName, excludingID)
-      : this.db.query("SELECT id FROM projects WHERE normalized_name = ?").get(normalizedName);
+      : this.db
+          .query("SELECT id FROM projects WHERE normalized_name = ?")
+          .get(normalizedName);
     return Boolean(row);
   }
 
@@ -455,69 +771,62 @@ export class MemoryStore {
   }
 
   private recordCurrentRevision(
-    projectID: string,
-    noteID: string,
+    note: NoteStorageRow,
     sourceType: "mcp-manual" | "opencode-capture" | "admin",
     now: number,
-    capture?: {
-      eventID?: string;
-      sessionID?: string;
-      messageID?: string;
-      ordinal?: number;
-      toolCallID?: string;
-      redactionVersion?: string;
-      extractorVersion?: string;
-      confidence?: number;
-    },
   ): string {
-    const note = this.db
-      .query("SELECT * FROM notes WHERE project_id = ? AND id = ?")
-      .get(projectID, noteID) as NoteRow | undefined;
-    if (!note) throw new Error(`note ${noteID} not found while recording revision`);
     const provenanceID = randomUUID();
-    this.db.query(`
+    this.db
+      .query(
+        `
       INSERT INTO note_provenance
         (id, project_id, note_id, source_type, capture_event_id, source_session_id,
          source_message_id, source_ordinal, source_tool_call_id, redaction_version,
          extractor_version, confidence, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      provenanceID,
-      projectID,
-      noteID,
-      sourceType,
-      capture?.eventID ?? null,
-      capture?.sessionID ?? null,
-      capture?.messageID ?? null,
-      capture?.ordinal ?? null,
-      capture?.toolCallID ?? null,
-      capture?.redactionVersion ?? null,
-      capture?.extractorVersion ?? null,
-      capture?.confidence ?? null,
-      now,
-    );
-    this.db.query(`
+    `,
+      )
+      .run(
+        provenanceID,
+        note.project_id,
+        note.id,
+        sourceType,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        now,
+      );
+    this.db
+      .query(
+        `
       INSERT INTO note_revisions
         (project_id, note_id, revision, kind, title, summary, content, size_class,
          pinned, status, supersedes_id, subject_key, content_hash, provenance_id, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      projectID,
-      noteID,
-      note.current_revision,
-      note.kind,
-      note.title,
-      note.summary,
-      note.content,
-      note.size_class,
-      note.pinned,
-      note.status,
-      note.supersedes_id,
-      note.subject_key,
-      note.content_hash,
-      provenanceID,
-      now,
-    );
+    `,
+      )
+      .run(
+        note.project_id,
+        note.id,
+        note.current_revision,
+        note.kind,
+        note.title,
+        note.summary,
+        note.content,
+        note.size_class,
+        note.pinned,
+        note.status,
+        note.supersedes_id,
+        note.subject_key,
+        note.content_hash,
+        provenanceID,
+        now,
+      );
     return provenanceID;
   }
 
@@ -528,14 +837,72 @@ export class MemoryStore {
     noteID: string | null,
     revision: number | null,
     contentHash: string | null,
+    now: number,
   ): void {
-    const now = Date.now();
-    this.db.query(`
-      INSERT OR IGNORE INTO index_outbox
-        (backend, operation, project_id, note_id, revision, content_hash, state,
-         attempt_count, available_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
-    `).run(backend, operation, projectID, noteID, revision, contentHash, now, now);
+    if (
+      (operation === "upsert-note" &&
+        (!noteID ||
+          revision === null ||
+          revision < 1 ||
+          !contentHash ||
+          !isHash(contentHash))) ||
+      (operation === "delete-note" &&
+        (!noteID ||
+          revision === null ||
+          revision < 1 ||
+          contentHash !== null)) ||
+      (operation === "purge-project" &&
+        (noteID !== null || revision !== null || contentHash !== null))
+    ) {
+      throw new Error("invalid_outbox_row");
+    }
+    const generation = 0;
+    const operationKey = hashTuple("outbox-operation", 2, [
+      backend,
+      operation,
+      projectID,
+      noteID,
+      revision,
+      contentHash,
+      generation,
+    ]);
+    this.db
+      .query(
+        `
+      INSERT INTO index_outbox
+        (backend, operation_key, operation, project_id, note_id, revision, content_hash,
+         generation, lease_generation, fence, state, attempt_count, available_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'pending', 0, ?, ?)
+    `,
+      )
+      .run(
+        backend,
+        operationKey,
+        operation,
+        projectID,
+        noteID,
+        revision,
+        contentHash,
+        generation,
+        now,
+        now,
+      );
+  }
+
+  private immediateTransaction<T>(operation: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = operation();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // Preserve the original mutation error if rollback also fails.
+      }
+      throw error;
+    }
   }
 }
 
@@ -547,10 +914,9 @@ interface ProjectRow {
   updated_at: number;
 }
 
-interface NoteRow {
+interface NoteStorageRow {
   id: string;
   project_id: string;
-  project_name: string;
   kind: Kind;
   title: string;
   summary: string;
@@ -564,6 +930,15 @@ interface NoteRow {
   content_hash: string;
   created_at: number;
   updated_at: number;
+}
+
+interface NoteRow extends NoteStorageRow {
+  project_name: string;
+}
+
+interface DeletedProjectRow {
+  id: string;
+  name: string;
 }
 
 interface EdgeRow {
@@ -628,4 +1003,8 @@ function toCard(note: Note, via: "match" | "neighbor"): RecallCard {
     pinned: note.pinned,
     via,
   };
+}
+
+function isHash(value: string): boolean {
+  return /^[0-9a-f]{64}$/i.test(value);
 }

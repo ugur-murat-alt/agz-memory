@@ -4,6 +4,8 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { openMemoryDatabase } from "../../src/db";
+import { doctorDatabase } from "../../src/admin/doctor";
+import { schemaFingerprint } from "../../src/db/schema";
 import { MemoryStore } from "../../src/store";
 
 describe("schema fingerprint validation", () => {
@@ -26,6 +28,10 @@ describe("schema fingerprint validation", () => {
       }).toThrow("schema_fingerprint_mismatch");
       const unchanged = new Database(path, { readonly: true });
       try {
+        expect(doctorDatabase(unchanged)).toMatchObject({
+          ok: false,
+          failures: expect.arrayContaining(["schema_fingerprint_mismatch"]),
+        });
         expect(
           (unchanged.query("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'notes_fts_ai'").get() as { sql: string }).sql,
         ).toContain("SELECT 1");
@@ -35,6 +41,19 @@ describe("schema fingerprint validation", () => {
     } finally {
       reopened?.close();
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("ignores SQLite-version-specific FTS shadow table DDL rendering", () => {
+    const first = new Database(":memory:");
+    const second = new Database(":memory:");
+    try {
+      first.exec("CREATE TABLE notes_fts_data(id INTEGER PRIMARY KEY, block BLOB)");
+      second.exec("CREATE TABLE notes_fts_data ( id INTEGER PRIMARY KEY, block BLOB )");
+      expect(schemaFingerprint(first)).toBe(schemaFingerprint(second));
+    } finally {
+      first.close();
+      second.close();
     }
   });
 });

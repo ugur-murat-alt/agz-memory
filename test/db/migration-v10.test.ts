@@ -8,15 +8,16 @@ import { CAPTURE_SCHEMA, parseCaptureEvent } from "../../src/capture/contract";
 import { openMemoryDatabase } from "../../src/db";
 import { acquireMigrationLock } from "../../src/db/migration-lock";
 import { createSchema } from "../../src/db/schema";
+import { hashTuple } from "../../src/hash";
 
-describe("schema v10 migration", () => {
+describe("schema v11 migration through v10", () => {
   test("preserves v9 capture rows while replacing their retired contract", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-v9-v10-"));
     const path = join(directory, "memory.sqlite");
     createV9Database(path);
 
     const opened = openMemoryDatabase(path);
-    expect(opened.db.query("SELECT version FROM schema_state").all()).toEqual([{ version: 10 }]);
+    expect(opened.db.query("SELECT version FROM schema_state").all()).toEqual([{ version: 11 }]);
     const row = opened.db
       .query("SELECT idempotency_key, contract, state, payload_json, payload_hash FROM capture_events")
       .get() as {
@@ -27,8 +28,10 @@ describe("schema v10 migration", () => {
       payload_hash: string;
     };
     expect(row).toMatchObject({ contract: CAPTURE_SCHEMA, state: "shadowed" });
-    expect(parseCaptureEvent(JSON.parse(row.payload_json)).schema).toBe(CAPTURE_SCHEMA);
-    expect(createHash("sha256").update(row.payload_json, "utf8").digest("hex")).toBe(row.payload_hash);
+    const event = parseCaptureEvent(JSON.parse(row.payload_json));
+    expect(event.schema).toBe(CAPTURE_SCHEMA);
+    event.source.observedAt = 0;
+    expect(hashTuple("capture-payload", 2, [JSON.stringify(event)])).toBe(row.payload_hash);
     expect(
       (opened.db.query("SELECT sql FROM sqlite_master WHERE name = 'capture_events'").get() as { sql: string })
         .sql,
@@ -74,17 +77,17 @@ describe("schema v10 migration", () => {
     expect(databases).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(backupDirectory, manifests[0]!), "utf8"))).toMatchObject({
       sourceSchema: 9,
-      targetSchema: 10,
+      targetSchema: 11,
     });
     const backup = new Database(join(backupDirectory, databases[0]!), { readonly: true });
     expect(backup.query("SELECT version FROM schema_state").get()).toEqual({ version: 9 });
     backup.close();
 
     const migrated = new Database(path, { readonly: true });
-    expect(migrated.query("SELECT version FROM schema_state").get()).toEqual({ version: 10 });
+    expect(migrated.query("SELECT version FROM schema_state").get()).toEqual({ version: 11 });
     migrated.close();
     rmSync(directory, { recursive: true, force: true });
-  });
+  }, 30_000);
 
   test("reopens the canonical database after a waiting connection is replaced", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-v9-v10-replaced-"));
@@ -116,10 +119,45 @@ describe("schema v10 migration", () => {
     expect(result.exitCode === 0 ? [] : [result]).toEqual([]);
 
     const canonical = new Database(path, { readonly: true });
-    expect(canonical.query("SELECT version FROM schema_state").get()).toEqual({ version: 10 });
+    expect(canonical.query("SELECT version FROM schema_state").get()).toEqual({ version: 11 });
     canonical.close();
     rmSync(directory, { recursive: true, force: true });
-  });
+  }, 30_000);
+
+  test("serializes concurrent first-time schema creation", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-v11-first-open-"));
+    const path = join(directory, "memory.sqlite");
+    const modulePath = resolve(import.meta.dir, "../../src/db.ts");
+    const script = `
+      import { openMemoryDatabase } from ${JSON.stringify(modulePath)};
+      const opened = openMemoryDatabase(${JSON.stringify(path)});
+      const version = opened.db.query("SELECT version FROM schema_state").get();
+      opened.close();
+      if (version?.version !== 11) process.exit(2);
+    `;
+    const gate = acquireMigrationLock(path, 11);
+    const children = Array.from({ length: 6 }, () =>
+      Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" }),
+    );
+    let waiterCount = 0;
+    try {
+      waiterCount = await waitForMigrationWaiters(directory, children.length);
+    } finally {
+      gate.release();
+    }
+    const results = await Promise.all(
+      children.map(async (child) => ({
+        exitCode: await child.exited,
+        stderr: await new Response(child.stderr).text(),
+      })),
+    );
+    expect(waiterCount).toBe(children.length);
+    expect(results.filter((result) => result.exitCode !== 0)).toEqual([]);
+    const db = new Database(path, { readonly: true });
+    expect(db.query("SELECT version FROM schema_state").get()).toEqual({ version: 11 });
+    db.close();
+    rmSync(directory, { recursive: true, force: true });
+  }, 30_000);
 });
 
 function migrationWaiterCount(directory: string): number {

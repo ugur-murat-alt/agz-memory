@@ -1,8 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { createHash } from "crypto";
+import {
+  chmodSync,
+  closeSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { createVerifiedBackup, restoreVerifiedBackup, verifyBackupManifest } from "../../src/db/backup";
 import { openMemoryDatabase } from "../../src/db";
 import { MemoryStore } from "../../src/store";
@@ -17,10 +32,10 @@ describe("backup, restore, and migration lock", () => {
     const store = new MemoryStore(opened.db);
     const projectID = store.createProject("Restore").project!.projectID;
     store.update(projectID, { kind: "fact", title: "before", summary: "before" });
-    const backup = createVerifiedBackup(opened.db, path, 10, 10, "test");
+    const backup = createVerifiedBackup(opened.db, path, 11, 11, "test");
     expect(verifyBackupManifest(backup.manifestPath).manifest.sha256).toBe(backup.manifest.sha256);
-    expect(() => createVerifiedBackup(opened.db, path, 9, 10, "test")).toThrow(
-      "backup source schema v9 does not match database schema v10",
+    expect(() => createVerifiedBackup(opened.db, path, 10, 11, "test")).toThrow(
+      "backup source schema v10 does not match database schema v11",
     );
     const mismatchedManifest = `${backup.manifestPath}.mismatched.json`;
     writeFileSync(
@@ -31,7 +46,20 @@ describe("backup, restore, and migration lock", () => {
       "backup manifest source schema does not match database",
     );
     store.update(projectID, { kind: "fact", title: "after", summary: "after" });
+    const alternateBackup = createVerifiedBackup(opened.db, path, 11, 11, "test");
     opened.close();
+
+    const alternateTarget = join(directory, "alternate.sqlite");
+    expect(() =>
+      restoreVerifiedBackup(
+        alternateBackup.manifestPath,
+        alternateTarget,
+        "RESTORE_DATABASE_FROM_VERIFIED_BACKUP",
+        undefined,
+        backup.manifest.sha256,
+      ),
+    ).toThrow("restore manifest hash mismatch");
+    expect(existsSync(alternateTarget)).toBe(false);
 
     const preserved = restoreVerifiedBackup(
       backup.manifestPath,
@@ -56,7 +84,7 @@ describe("backup, restore, and migration lock", () => {
     const store = new MemoryStore(opened.db);
     const projectID = store.createProject("Busy Restore").project!.projectID;
     store.update(projectID, { kind: "fact", title: "before", summary: "before" });
-    const backup = createVerifiedBackup(opened.db, path, 10, 10, "test");
+    const backup = createVerifiedBackup(opened.db, path, 11, 11, "test");
     opened.close();
 
     const reader = new Database(path);
@@ -85,6 +113,84 @@ describe("backup, restore, and migration lock", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  test("hashes backup files across multiple chunks and rejects later corruption", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-backup-hash-"));
+    const path = join(directory, "memory.sqlite");
+    const opened = openMemoryDatabase(path);
+    try {
+      const projectID = new MemoryStore(opened.db).createProject("Chunked hash").project!
+        .projectID;
+      new MemoryStore(opened.db).update(projectID, {
+        kind: "fact",
+        title: "Large backup",
+        summary: "Large backup",
+        content: "chunk boundary coverage",
+      });
+      const backup = createVerifiedBackup(opened.db, path, 11, 11, "test");
+      const bytes = readFileSync(backup.databasePath);
+      expect(bytes.byteLength).toBeGreaterThan(64 * 1024);
+      expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+        backup.manifest.sha256,
+      );
+
+      const descriptor = openSync(backup.databasePath, "r+");
+      try {
+        const offset = 70 * 1024;
+        const byte = Buffer.alloc(1);
+        expect(readSync(descriptor, byte, 0, 1, offset)).toBe(1);
+        byte[0] = byte[0]! ^ 0xff;
+        expect(writeSync(descriptor, byte, 0, 1, offset)).toBe(1);
+      } finally {
+        closeSync(descriptor);
+      }
+      expect(() => verifyBackupManifest(backup.manifestPath)).toThrow(
+        "backup hash or size mismatch",
+      );
+    } finally {
+      opened.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an integrity-clean backup that is not an AGZ database", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-backup-foreign-"));
+    const path = join(directory, "memory.sqlite");
+    const opened = openMemoryDatabase(path);
+    const backup = createVerifiedBackup(opened.db, path, 11, 11, "test");
+    opened.close();
+    const foreignPath = join(dirname(backup.databasePath), "foreign.sqlite");
+    const foreign = new Database(foreignPath, { create: true });
+    foreign.exec(`
+      CREATE TABLE unrelated (id INTEGER PRIMARY KEY);
+      CREATE TABLE schema_state (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_state VALUES (10);
+    `);
+    foreign.close();
+    const bytes = readFileSync(foreignPath);
+    const manifestPath = join(dirname(backup.manifestPath), "foreign.manifest.json");
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({
+        ...backup.manifest,
+        sourceSchema: 10,
+        databaseFile: "foreign.sqlite",
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        size: statSync(foreignPath).size,
+        counts: {},
+      })}\n`,
+    );
+    const before = createHash("sha256").update(readFileSync(path)).digest("hex");
+
+    expect(() => verifyBackupManifest(manifestPath)).toThrow(
+      "backup manifest source schema does not match database",
+    );
+    expect(() =>
+      restoreVerifiedBackup(manifestPath, path, "RESTORE_DATABASE_FROM_VERIFIED_BACKUP"),
+    ).toThrow("backup manifest source schema does not match database");
+    expect(createHash("sha256").update(readFileSync(path)).digest("hex")).toBe(before);
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   test("restores a verified backup over an unhealthy target and preserves the corrupt source", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-restore-corrupt-"));
     const path = join(directory, "memory.sqlite");
@@ -92,7 +198,7 @@ describe("backup, restore, and migration lock", () => {
     const store = new MemoryStore(opened.db);
     const projectID = store.createProject("Corrupt Restore").project!.projectID;
     store.update(projectID, { kind: "fact", title: "recoverable", summary: "recoverable" });
-    const backup = createVerifiedBackup(opened.db, path, 10, 10, "test");
+    const backup = createVerifiedBackup(opened.db, path, 11, 11, "test");
     opened.close();
     writeFileSync(path, "corrupt-source");
 
@@ -113,7 +219,7 @@ describe("backup, restore, and migration lock", () => {
     const path = join(directory, "memory.sqlite");
     const opened = openMemoryDatabase(path);
     new MemoryStore(opened.db).createProject("Prune");
-    const backup = createVerifiedBackup(opened.db, path, 10, 10, "test");
+    const backup = createVerifiedBackup(opened.db, path, 11, 11, "test");
     opened.close();
     const original = JSON.parse(readFileSync(backup.manifestPath, "utf8")) as Record<string, unknown>;
     writeFileSync(

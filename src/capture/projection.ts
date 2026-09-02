@@ -30,6 +30,7 @@ export function projectSessionSummary(
   messages: readonly { role: string; parts: readonly unknown[] }[],
   maxCharacters = 4_800,
 ): ProjectedText {
+  const limit = normalizeLimit(maxCharacters);
   const selected: string[] = [];
   let size = 0;
   let truncated = false;
@@ -37,9 +38,10 @@ export function projectSessionSummary(
     const message = messages[index]!;
     if (message.role !== "user" && message.role !== "assistant") continue;
     const projected = projectAssistantParts(message.parts, maxCharacters);
+    truncated ||= projected.truncated;
     if (!projected.text) continue;
     const entry = `${message.role}: ${projected.text}`;
-    if (size + entry.length + 2 > maxCharacters) {
+    if (size + entry.length + 2 > limit) {
       truncated = true;
       break;
     }
@@ -54,7 +56,7 @@ export function projectToolSignal(
   status: "completed" | "error",
   error?: unknown,
 ): { tool: string; status: "completed" | "error"; errorType?: string } {
-  const normalizedTool = tool.trim().slice(0, 160);
+  const normalizedTool = truncateHead(tool.trim(), 160);
   const errorType = status === "error" ? normalizeErrorType(error) : undefined;
   return { tool: normalizedTool, status, ...(errorType ? { errorType } : {}) };
 }
@@ -70,8 +72,50 @@ function normalizeErrorType(error: unknown): string {
 }
 
 function bound(value: string, maxCharacters: number): ProjectedText {
+  const limit = normalizeLimit(maxCharacters);
+  const truncated = value.length > limit;
   return {
-    text: value.length > maxCharacters ? value.slice(value.length - maxCharacters) : value,
-    truncated: value.length > maxCharacters,
+    text: truncated ? truncateTail(value, limit) : value,
+    truncated,
   };
+}
+
+function normalizeLimit(value: number): number {
+  if (value === Number.POSITIVE_INFINITY) return Number.MAX_SAFE_INTEGER;
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.floor(value));
+}
+
+function truncateHead(value: string, maxCharacters: number): string {
+  if (maxCharacters <= 0) return "";
+  if (value.length <= maxCharacters) return value;
+  let offset = 0;
+  while (offset < value.length) {
+    const codePoint = value.codePointAt(offset)!;
+    const width = codePoint > 0xffff ? 2 : 1;
+    if (offset + width > maxCharacters) break;
+    offset += width;
+  }
+  return value.slice(0, offset);
+}
+
+function truncateTail(value: string, maxCharacters: number): string {
+  if (maxCharacters <= 0) return "";
+  if (value.length <= maxCharacters) return value;
+  let offset = value.length;
+  let size = 0;
+  while (offset > 0) {
+    const last = value.charCodeAt(offset - 1);
+    const paired =
+      last >= 0xdc00 &&
+      last <= 0xdfff &&
+      offset > 1 &&
+      value.charCodeAt(offset - 2) >= 0xd800 &&
+      value.charCodeAt(offset - 2) <= 0xdbff;
+    const width = paired ? 2 : 1;
+    if (size + width > maxCharacters) break;
+    offset -= width;
+    size += width;
+  }
+  return value.slice(offset);
 }

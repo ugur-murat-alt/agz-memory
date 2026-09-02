@@ -3,7 +3,7 @@ import { symlinkSync, mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { openMemoryDatabase } from "../../src/db";
-import { createVerifiedBackup } from "../../src/db/backup";
+import { createVerifiedBackup, restoreVerifiedBackup } from "../../src/db/backup";
 
 describe("database path symlink policy", () => {
   test("rejects a symlink at the canonical database path", () => {
@@ -36,11 +36,35 @@ describe("database path symlink policy", () => {
 
     try {
       symlinkSync(realBackupRoot, backupRoot, "dir");
-      expect(() => createVerifiedBackup(opened.db, databasePath, 10, 10, "test")).toThrow(
+      expect(() => createVerifiedBackup(opened.db, databasePath, 11, 11, "test")).toThrow(
         /symbolic|symlink|backup root/i,
       );
     } finally {
       opened.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a directory masquerading as a SQLite sidecar without deleting it", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-sidecar-directory-"));
+    const databasePath = join(directory, "memory.sqlite");
+    const opened = openMemoryDatabase(databasePath);
+    const backup = createVerifiedBackup(opened.db, databasePath, 11, 11, "test");
+    opened.close();
+    const sidecar = `${databasePath}-wal`;
+    rmSync(sidecar, { force: true });
+    mkdirSync(sidecar);
+
+    try {
+      expect(() =>
+        restoreVerifiedBackup(
+          backup.manifestPath,
+          databasePath,
+          "RESTORE_DATABASE_FROM_VERIFIED_BACKUP",
+        ),
+      ).toThrow(/sidecar|regular file/i);
+      expect(() => mkdirSync(join(sidecar, "still-present"))).not.toThrow();
+    } finally {
       rmSync(directory, { recursive: true, force: true });
     }
   });

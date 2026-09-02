@@ -21,7 +21,9 @@ afterEach(async () => {
 
 describe("MCP compatibility surface", () => {
   test("keeps final persisted and configuration identities stable", () => {
-    expect(CAPTURE_SCHEMA).toBe("agz-memory.capture/1");
+    const home = join(tmpdir(), "agz-memory-contract-home");
+    const customDatabase = join(tmpdir(), "agz-memory-contract-custom.sqlite");
+    expect(CAPTURE_SCHEMA).toBe("agz-memory.capture/2");
     expect(BACKUP_FORMAT).toBe("agz-memory-backup/1");
     expect(
       formatUntrustedContext("project-id", [
@@ -38,12 +40,12 @@ describe("MCP compatibility surface", () => {
         },
       ])?.startsWith('<agz-memory-context trust="untrusted" project-id="project-id">'),
     ).toBe(true);
-    expect(resolveConfig({ HOME: "/tmp/agz-memory-contract-home" }).databasePath).toBe(
-      "/tmp/agz-memory-contract-home/.local/share/opencode-memory/memory.sqlite",
+    expect(resolveConfig({ HOME: home }).databasePath).toBe(
+      join(home, ".local", "share", "opencode-memory", "memory.sqlite"),
     );
     expect(
-      resolveConfig({ OPENCODE_MEMORY_DATABASE_PATH: "/custom/memory.sqlite" }).databasePath,
-    ).toBe("/custom/memory.sqlite");
+      resolveConfig({ OPENCODE_MEMORY_DATABASE_PATH: customDatabase }).databasePath,
+    ).toBe(customDatabase);
   });
 
   test("keeps initialize identity, instructions, and exact tool catalog stable", async () => {

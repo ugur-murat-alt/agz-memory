@@ -26,5 +26,9 @@ export function weightedReciprocalRankFusion(channels: readonly RankedHit[]): Fu
     if (hit.channel !== "graph") current.matchedCandidate = true;
     fused.set(hit.noteID, current);
   }
-  return [...fused.values()];
+  return [...fused.values()].sort(
+    (left, right) =>
+      right.score - left.score ||
+      (left.noteID < right.noteID ? -1 : left.noteID > right.noteID ? 1 : 0),
+  );
 }

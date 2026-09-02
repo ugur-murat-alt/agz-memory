@@ -11,76 +11,166 @@ export interface RedactionResult {
 interface Rule {
   name: string;
   pattern: RegExp;
-  highRisk?: boolean;
 }
+
+const SECRET_ASSIGNMENT_KEY = String.raw`(?:[A-Za-z][A-Za-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*|password|passwd|secret|token|api[_-]?key|private[_-]?key)`;
+const SECRET_ASSIGNMENT_VALUE = String.raw`(?:"(?![<$\[])[^"\r\n]{8,}"|'(?![<$\[])[^'\r\n]{8,}'|(?![<$\[])[^\s,;]{8,})`;
 
 const RULES: Rule[] = [
   {
     name: "private-key",
-    pattern: /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/gi,
-    highRisk: true,
+    pattern:
+      /-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED |PGP )?PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA |ENCRYPTED |PGP )?PRIVATE KEY(?: BLOCK)?-----/gi,
   },
   {
     name: "credential-uri",
-    pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@[^\s]+/gi,
-    highRisk: true,
+    pattern: /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@[^\s]+/gi,
   },
-  { name: "bearer", pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi },
-  { name: "basic-auth", pattern: /\bBasic\s+[A-Za-z0-9+/=]{12,}/gi },
-  { name: "github-token", pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g },
-  { name: "gitlab-token", pattern: /\bglpat-[A-Za-z0-9_-]{16,}\b/g },
-  { name: "aws-access-key", pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g },
-  { name: "jwt", pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g },
+  {
+    name: "bearer",
+    pattern: /Bearer\s+[A-Za-z0-9._~+/=-]{12,}(?=$|[^A-Za-z0-9._~+/=-])/gi,
+  },
+  {
+    name: "basic-auth",
+    pattern: /Basic\s+[A-Za-z0-9+/=]{12,}(?=$|[^A-Za-z0-9+/=])/gi,
+  },
+  {
+    name: "github-token",
+    pattern: /(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})(?=$|[^A-Za-z0-9_])/g,
+  },
+  {
+    name: "gitlab-token",
+    pattern: /glpat-[A-Za-z0-9_-]{16,}(?=$|[^A-Za-z0-9_-])/g,
+  },
+  {
+    name: "aws-access-key",
+    pattern: /(?:AKIA|ASIA)[A-Z0-9]{16}(?=$|[^A-Z0-9])/g,
+  },
+  {
+    name: "jwt",
+    pattern: /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?=$|[^A-Za-z0-9_-])/g,
+  },
+  {
+    name: "anthropic-token",
+    pattern: /sk-ant-[A-Za-z0-9_-]{20,}(?=$|[^A-Za-z0-9_-])/g,
+  },
+  {
+    name: "openai-token",
+    pattern: /sk-(?!ant-)(?:proj-)?[A-Za-z0-9_-]{20,}(?=$|[^A-Za-z0-9_-])/g,
+  },
+  {
+    name: "google-api-key",
+    pattern: /AIza[A-Za-z0-9_-]{30,}(?=$|[^A-Za-z0-9_-])/g,
+  },
+  {
+    name: "slack-token",
+    pattern: /xox[baprs]-[A-Za-z0-9-]{32,}(?=$|[^A-Za-z0-9-])/g,
+  },
+  {
+    name: "stripe-token",
+    pattern: /[sr]k_(?:live|test)_[A-Za-z0-9]{16,}(?=$|[^A-Za-z0-9])/g,
+  },
+  {
+    name: "npm-token",
+    pattern: /npm_[A-Za-z0-9]{20,}(?=$|[^A-Za-z0-9])/g,
+  },
+  {
+    name: "api-key-header",
+    pattern: new RegExp(
+      String.raw`(?:x-api-key|api-key|api_key)\s*[:=]\s*${SECRET_ASSIGNMENT_VALUE}`,
+      "gi",
+    ),
+  },
   {
     name: "secret-assignment",
-    pattern: /\b(?:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|PRIVATE_KEY)\s*[:=]\s*["']?[^\s,"']{8,}["']?/gi,
+    pattern: new RegExp(
+      String.raw`${SECRET_ASSIGNMENT_KEY}\s*[:=]\s*${SECRET_ASSIGNMENT_VALUE}`,
+      "gi",
+    ),
   },
 ];
 
 export function redactText(
   value: string,
-  options: { maxCharacters?: number; denylist?: readonly string[] } = {},
+  options: {
+    maxCharacters?: number;
+    denylist?: readonly string[];
+    sourceTruncated?: boolean;
+  } = {},
 ): RedactionResult {
-  const maxCharacters = options.maxCharacters ?? Number.MAX_SAFE_INTEGER;
+  const maxCharacters = normalizeLimit(options.maxCharacters);
+  const inputLength = value.length;
   let text = value;
   let replacements = 0;
-  let highRisk = 0;
+  let detectedSecret = false;
   const classes: Record<string, number> = {};
 
   for (const literal of options.denylist ?? []) {
-    if (!literal) continue;
-    const count = text.split(literal).length - 1;
+    if (typeof literal !== "string" || !literal) continue;
+    let count = 0;
+    let offset = 0;
+    while (offset <= text.length) {
+      const index = text.indexOf(literal, offset);
+      if (index < 0) break;
+      count++;
+      offset = index + literal.length;
+    }
     if (count === 0) continue;
     replacements += count;
+    detectedSecret = true;
     classes.denylist = (classes.denylist ?? 0) + count;
     text = text.replaceAll(literal, "[REDACTED:denylist]");
   }
 
   for (const rule of RULES) {
+    rule.pattern.lastIndex = 0;
     text = text.replace(rule.pattern, () => {
       replacements++;
+      detectedSecret = true;
       classes[rule.name] = (classes[rule.name] ?? 0) + 1;
-      if (rule.highRisk) highRisk++;
       return `[REDACTED:${rule.name}]`;
     });
   }
 
-  text = text.replace(/\b[A-Za-z0-9+/=_-]{32,}\b/g, (candidate) => {
+  text = text.replace(/[A-Za-z0-9+/=_-]{32,}/g, (candidate) => {
     if (!looksHighEntropy(candidate)) return candidate;
     replacements++;
+    detectedSecret = true;
     classes.entropy = (classes.entropy ?? 0) + 1;
     return "[REDACTED:entropy]";
   });
 
-  const truncated = text.length > maxCharacters;
-  if (truncated) text = text.slice(0, maxCharacters);
+  // Scan first, then apply the deterministic head bound. This keeps a secret
+  // just beyond the retained window from escaping detection.
+  const truncated =
+    Boolean(options.sourceTruncated) || inputLength > maxCharacters || text.length > maxCharacters;
+  if (text.length > maxCharacters) text = truncateHead(text, maxCharacters);
   return {
     text,
     replacements,
     classes,
     truncated,
-    quarantined: highRisk > 0 || replacements >= 3,
+    quarantined: detectedSecret,
   };
+}
+
+function normalizeLimit(value: number | undefined): number {
+  if (value === undefined || value === Number.POSITIVE_INFINITY) return Number.MAX_SAFE_INTEGER;
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.floor(value));
+}
+
+function truncateHead(value: string, maxCharacters: number): string {
+  if (maxCharacters <= 0) return "";
+  if (value.length <= maxCharacters) return value;
+  let offset = 0;
+  while (offset < value.length) {
+    const codePoint = value.codePointAt(offset)!;
+    const width = codePoint > 0xffff ? 2 : 1;
+    if (offset + width > maxCharacters) break;
+    offset += width;
+  }
+  return value.slice(0, offset);
 }
 
 function looksHighEntropy(value: string): boolean {

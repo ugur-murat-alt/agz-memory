@@ -8,10 +8,13 @@ import { runAdmin } from "../../src/admin/index";
 import { openMemoryDatabase } from "../../src/db";
 import { deriveDocument } from "../../src/retrieval/derived";
 import { formatUntrustedContext } from "../../src/retrieval/formatter";
+import { hashTuple } from "../../src/hash";
 import type {
   BackendHealth,
+  BackendOperationContext,
   DerivedDocument,
   DerivedRef,
+  OutboxBackend,
   RankedHit,
   RetrievalBackend,
 } from "../../src/retrieval/contract";
@@ -181,9 +184,33 @@ describe("retrieval hardening regressions", () => {
           content: `Stored semantic content ${index}`,
         }).id!,
       );
-      const backend = backendWithQuery(async () =>
-        noteIDs.map((noteID, index) => ({ noteID, channel: "semantic" as const, rank: index + 1 })),
-      );
+      const rows = fixture.opened.db.query(
+        `SELECT id, current_revision, kind, title, summary, content
+           FROM notes WHERE project_id = ? ORDER BY id`,
+      ).all(projectID) as Array<{
+        id: string;
+        current_revision: number;
+        kind: string;
+        title: string;
+        summary: string;
+        content: string;
+      }>;
+      const hits = rows.map((row, index) => ({
+        noteID: row.id,
+        channel: "semantic" as const,
+        rank: index + 1,
+        revision: row.current_revision,
+        contentHash: deriveDocument({
+          projectID,
+          noteID: row.id,
+          revision: row.current_revision,
+          kind: row.kind,
+          title: row.title,
+          summary: row.summary,
+          content: row.content,
+        })!.contentHash,
+      }));
+      const backend = backendWithQuery(async () => hits);
       const queryCounter = instrumentQueries(fixture.opened.db);
       try {
         const result = await new RetrievalStore(fixture.opened.db, backend).retrieve({
@@ -326,6 +353,7 @@ describe("retrieval hardening regressions", () => {
         summary: "Lease fencing record",
       });
       let callCount = 0;
+      const operations: BackendOperationContext[] = [];
       let releaseFirst!: () => void;
       let firstStarted!: () => void;
       const firstGate = new Promise<void>((resolve) => {
@@ -335,8 +363,10 @@ describe("retrieval hardening regressions", () => {
         firstStarted = resolve;
       });
       const backend = backendWithQuery(async () => [], "lease-backend");
-      backend.upsert = async () => {
+      backend.upsert = async (_document, _signal, operation) => {
         callCount++;
+        if (!operation) throw new Error("missing outbox operation context");
+        operations.push(operation);
         if (callCount === 1) {
           firstStarted();
           await firstGate;
@@ -374,6 +404,11 @@ describe("retrieval hardening regressions", () => {
       };
 
       expect(callCount).toBe(2);
+      expect(operations.map(({ sequence }) => sequence)).toEqual([
+        operations[0]!.sequence,
+        operations[0]!.sequence,
+      ]);
+      expect(operations.map(({ fence }) => fence)).toEqual([1, 2]);
       expect(firstOutcome).not.toBe("succeeded");
       expect(row).toMatchObject({ state: "pending", lease_owner: null, last_error_code: "backend_failure" });
     } finally {
@@ -401,13 +436,24 @@ describe("retrieval hardening regressions", () => {
         "SELECT current_revision, content_hash FROM notes WHERE id = ?",
       ).get(oldNoteID) as { current_revision: number; content_hash: string };
       const now = Date.now();
+      const oldOperationKey = hashTuple("outbox-operation", 2, [
+        backendID,
+        "upsert-note",
+        projectID,
+        oldNoteID,
+        oldRow.current_revision,
+        oldRow.content_hash,
+        0,
+      ]);
       fixture.opened.db.query(`
         INSERT INTO index_outbox
-          (backend, operation, project_id, note_id, revision, content_hash,
-           state, attempt_count, available_at, completed_at, created_at)
-        VALUES (?, 'upsert-note', ?, ?, ?, ?, 'succeeded', 4, ?, ?, ?)
+          (backend, operation_key, operation, project_id, note_id, revision, content_hash,
+           generation, lease_generation, fence, state, attempt_count, available_at,
+           heartbeat_at, completed_at, created_at)
+        VALUES (?, ?, 'upsert-note', ?, ?, ?, ?, 0, 0, 0, 'succeeded', 4, ?, NULL, ?, ?)
       `).run(
         backendID,
+        oldOperationKey,
         projectID,
         oldNoteID,
         oldRow.current_revision,
@@ -435,6 +481,52 @@ describe("retrieval hardening regressions", () => {
       expect(rows.some((row) => row.note_id === newNoteID)).toBe(true);
     } finally {
       restoreEnvironment("OPENCODE_MEMORY_DATABASE_PATH", previousPath);
+      closeFixture(fixture);
+    }
+  });
+
+  test("AGZ-047 snapshots after a concurrent canonical writer commits", async () => {
+    const fixture = openFixture();
+    const backendID = "reindex-concurrent-backend";
+    try {
+      const projectID = fixture.store.createProject("Concurrent generation reindex").project!.projectID;
+      const deletedNoteID = fixture.store.update(projectID, {
+        kind: "fact",
+        title: "Delete during reindex",
+        summary: "A stale snapshot must not queue this note after the purge",
+      }).id!;
+      fixture.opened.db.exec("BEGIN IMMEDIATE");
+      fixture.opened.db.query("DELETE FROM notes WHERE project_id = ? AND id = ?").run(projectID, deletedNoteID);
+
+      const child = Bun.spawn(
+        [process.execPath, join(import.meta.dir, "../../src/admin/index.ts"), "reindex", "--backend", backendID],
+        {
+          env: { ...process.env, OPENCODE_MEMORY_DATABASE_PATH: fixture.path },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      await Bun.sleep(100);
+      fixture.opened.db.exec("COMMIT");
+      const [exitCode, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+
+      const rows = fixture.opened.db.query(`
+        SELECT operation, note_id
+          FROM index_outbox
+         WHERE backend = ? AND project_id = ?
+         ORDER BY id
+      `).all(backendID, projectID) as Array<{ operation: string; note_id: string | null }>;
+      expect(rows[0]).toEqual({ operation: "purge-project", note_id: null });
+      expect(rows.some((row) => row.note_id === deletedNoteID)).toBe(false);
+    } finally {
+      try {
+        fixture.opened.db.exec("ROLLBACK");
+      } catch {}
       closeFixture(fixture);
     }
   });
@@ -516,9 +608,13 @@ function closeFixture(fixture: ReturnType<typeof openFixture>): void {
   rmSync(fixture.directory, { recursive: true, force: true });
 }
 
-function backendWithQuery(query: RetrievalBackend["query"], id = "retrieval-backend"): RetrievalBackend {
+function backendWithQuery(
+  query: RetrievalBackend["query"],
+  id = "retrieval-backend",
+): RetrievalBackend & OutboxBackend {
   return {
     id,
+    outboxProtocol: "agz-memory-outbox/1",
     async upsert(_document: DerivedDocument, _signal: AbortSignal): Promise<void> {},
     async delete(_ref: DerivedRef, _signal: AbortSignal): Promise<void> {},
     async purgeProject(_projectID: string, _signal: AbortSignal): Promise<void> {},

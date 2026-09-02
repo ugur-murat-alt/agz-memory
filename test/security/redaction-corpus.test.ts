@@ -115,6 +115,16 @@ const SECRET_CORPUS = [
     canary: ASSIGNED_SECRET,
   },
   {
+    name: "punctuation-leading password assignment",
+    input: "PASSWORD=!Secret123",
+    canary: "!Secret123",
+  },
+  {
+    name: "punctuation-only password assignment",
+    input: "PASSWORD=!@#%^&*()_+",
+    canary: "!@#%^&*()_+",
+  },
+  {
     name: "token assignment",
     input: `TOKEN=${ASSIGNED_SECRET}`,
     canary: ASSIGNED_SECRET,
@@ -217,10 +227,13 @@ describe("AGZ-018 redaction corpus", () => {
         opencodeProjectID: "opencode-redaction-corpus",
         canonicalDirectory: "/redaction-corpus",
       });
-      const event = secretEvent(projectID, binding.bindingKey, OPENAI_TOKEN);
+      const event = secretEvent(projectID, binding.bindingKey, OPENAI_TOKEN, "openai");
+      const punctuation = "!@#%^&*()_+";
+      const punctuationEvent = secretEvent(projectID, binding.bindingKey, punctuation, "punctuation");
 
       expect(capture.ingest(event, "auto-write").outcome).toBe("quarantined");
-      expect(scanSQLiteForCanaries(opened.db, [OPENAI_TOKEN])).toEqual([]);
+      expect(capture.ingest(punctuationEvent, "auto-write").outcome).toBe("quarantined");
+      expect(scanSQLiteForCanaries(opened.db, [OPENAI_TOKEN, punctuation])).toEqual([]);
     } finally {
       opened.close();
       rmSync(directory, { recursive: true, force: true });
@@ -232,14 +245,20 @@ function privateKey(label: string): string {
   return `-----BEGIN ${label}-----\n${PRIVATE_KEY_BODY}\n-----END ${label}-----`;
 }
 
-function secretEvent(projectID: string, bindingKey: string, canary: string): CaptureEventV1 {
+function secretEvent(
+  projectID: string,
+  bindingKey: string,
+  canary: string,
+  suffix: string,
+): CaptureEventV1 {
+  const messageID = `redaction-message-${suffix}`;
   return {
     schema: CAPTURE_SCHEMA,
     idempotencyKey: captureIdempotencyKey({
       kind: "user",
       bindingKey,
       sessionID: "redaction-session",
-      messageID: "redaction-message",
+      messageID,
     }),
     projectID,
     bindingKey,
@@ -249,14 +268,14 @@ function secretEvent(projectID: string, bindingKey: string, canary: string): Cap
       opencodeVersion: SUPPORTED_OPENCODE_VERSION,
       pluginVersion: "0.5.0-test",
       sessionID: "redaction-session",
-      messageID: "redaction-message",
+      messageID,
       observedAt: 1,
     },
     candidate: {
       kind: "decision",
       title: "Secret canary",
       summary: "This capture must never persist its raw canary.",
-      content: `Karar: ${canary}`,
+      content: `Karar: PASSWORD=${canary}`,
       intent: "create",
       confidence: 0.99,
       evidence: "explicit-user",

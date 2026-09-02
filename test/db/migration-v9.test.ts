@@ -5,16 +5,16 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { openMemoryDatabase } from "../../src/db";
 import { doctorDatabase } from "../../src/admin/doctor";
-import { noteContentHash } from "../../src/db/migrations/v009";
+import { noteContentHash } from "../../src/hash";
 
 describe("schema migration", () => {
-  test("preserves v8 rows and creates schema v10 revision, provenance, FTS, and backup", () => {
+  test("preserves v8 rows and creates schema v11 revision, provenance, FTS, and backup", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-v8-v10-"));
     const path = join(directory, "memory.sqlite");
     createV8Database(path);
 
     const opened = openMemoryDatabase(path);
-    expect(opened.db.query("SELECT version FROM schema_state").all()).toEqual([{ version: 10 }]);
+    expect(opened.db.query("SELECT version FROM schema_state").all()).toEqual([{ version: 11 }]);
     expect(
       opened.db
         .query(

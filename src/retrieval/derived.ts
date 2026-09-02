@@ -1,5 +1,5 @@
-import { createHash } from "crypto";
 import { redactText } from "../capture/redact";
+import { hashTuple } from "../hash";
 import type { DerivedDocument } from "./contract";
 
 export interface CanonicalDocumentSource {
@@ -16,10 +16,7 @@ export function deriveDocument(source: CanonicalDocumentSource): DerivedDocument
   const title = redactText(source.title);
   const summary = redactText(source.summary);
   const content = redactText(source.content);
-  if (title.quarantined || summary.quarantined || content.quarantined) return undefined;
-  const contentHash = createHash("sha256")
-    .update(`${source.kind}\0${title.text}\0${summary.text}\0${content.text}`, "utf8")
-    .digest("hex");
+  const contentHash = hashTuple("derived-note", 2, [source.kind, title.text, summary.text, content.text]);
   return {
     projectID: source.projectID,
     noteID: source.noteID,

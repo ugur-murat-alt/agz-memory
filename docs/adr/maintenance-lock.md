@@ -6,7 +6,7 @@ Date: 2026-09-02
 
 ## Context
 
-SQLite WAL coordinates transactions but does not make replacing the database pathname safe while another process holds an open connection. An old connection can continue to use the replaced inode and its WAL after restore. The schema 10 migration lock serializes migration owners only; normal MCP and plugin handles do not participate.
+SQLite WAL coordinates transactions but does not make replacing the database pathname safe while another process holds an open connection. An old connection can continue to use the replaced inode and its WAL after restore. Before schema 11, the migration lock serialized migration owners only; normal MCP and plugin handles did not participate.
 
 AGZ Memory must run on Linux, macOS, and Windows under Bun. Bun does not currently expose one portable shared/exclusive advisory-file-lock API for this package, so schema 11 uses a conservative filesystem protocol and fails closed whenever ownership cannot be established.
 
@@ -35,6 +35,26 @@ The second gate check closes the race where maintenance creates the gate between
 6. Verify the installed canonical database before removing the gate.
 
 There is no `--force` bypass for active or unverifiable leases. Stale cleanup requires current owner identity checks. Gate and lease deletion never recursively removes an unverified replacement pathname.
+
+Migration waiters recheck the canonical schema under a normal lease while they
+still own the migration lock. A waiter that finds the target schema returns that
+handle without creating another maintenance gate. After a successful migration,
+the owner releases the maintenance gate and publishes its normal lease before
+releasing the migration lock. This handoff prevents queued stale observations
+from creating a new gate between migration completion and reopen.
+
+An active gate left by a crashed local process is reclaimed in place: an
+exclusive takeover record serializes contenders and atomically replaces the
+stale owner while the gate directory remains continuously present. A reused PID
+is stale only when both process-start markers exist and differ. Remote owners,
+live owners, unavailable markers, malformed records, and missing records remain
+fail-closed.
+
+`retain()` atomically persists `state: recovery-required` before returning. Such
+a gate is never reclaimed automatically. A verified restore may take it over
+only with the exact recorded owner ID and
+`RECOVER_RETAINED_MAINTENANCE_GATE`; the restore keeps the gate continuously
+held and validates the installed database before release.
 
 ### Restore
 

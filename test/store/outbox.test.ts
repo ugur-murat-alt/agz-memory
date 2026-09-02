@@ -5,10 +5,11 @@ import { join } from "path";
 import { openMemoryDatabase } from "../../src/db";
 import type {
   BackendHealth,
+  BackendOperationContext,
   DerivedDocument,
   DerivedRef,
+  OutboxBackend,
   RankedHit,
-  RetrievalBackend,
 } from "../../src/retrieval/contract";
 import { MemoryStore } from "../../src/store";
 import { OutboxWorker } from "../../src/store/outbox";
@@ -36,7 +37,13 @@ describe("outbox worker", () => {
       outcomes.push(outcome);
     }
     expect(outcomes).toEqual(["stale", "stale", "succeeded", "succeeded"]);
-    expect(backend.operations).toEqual([`delete:${projectID}:${noteID}`, `purge:${projectID}`]);
+    expect(backend.operations.map((value) => value.split(":").slice(0, -2).join(":"))).toEqual([
+      `delete:${projectID}:${noteID}`,
+      `purge:${projectID}`,
+    ]);
+    const contexts = backend.operations.map((value) => value.split(":").slice(-2).map(Number));
+    expect(contexts[0]![0]).toBeLessThan(contexts[1]![0]!);
+    expect(contexts.map(([, fence]) => fence)).toEqual([1, 1]);
     expect(
       (
         opened.db
@@ -49,17 +56,18 @@ describe("outbox worker", () => {
   });
 });
 
-class FakeBackend implements RetrievalBackend {
+class FakeBackend implements OutboxBackend {
   readonly id = "fake@1";
+  readonly outboxProtocol = "agz-memory-outbox/1";
   readonly operations: string[] = [];
-  async upsert(document: DerivedDocument): Promise<void> {
-    this.operations.push(`upsert:${document.projectID}:${document.noteID}:${document.revision}`);
+  async upsert(document: DerivedDocument, _signal: AbortSignal, operation: BackendOperationContext): Promise<void> {
+    this.operations.push(`upsert:${document.projectID}:${document.noteID}:${document.revision}:${operation.sequence}:${operation.fence}`);
   }
-  async delete(ref: DerivedRef): Promise<void> {
-    this.operations.push(`delete:${ref.projectID}:${ref.noteID}`);
+  async delete(ref: DerivedRef, _signal: AbortSignal, operation: BackendOperationContext): Promise<void> {
+    this.operations.push(`delete:${ref.projectID}:${ref.noteID}:${operation.sequence}:${operation.fence}`);
   }
-  async purgeProject(projectID: string): Promise<void> {
-    this.operations.push(`purge:${projectID}`);
+  async purgeProject(projectID: string, _signal: AbortSignal, operation: BackendOperationContext): Promise<void> {
+    this.operations.push(`purge:${projectID}:${operation.sequence}:${operation.fence}`);
   }
   async query(): Promise<RankedHit[]> {
     return [];

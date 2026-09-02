@@ -14,7 +14,7 @@ describe("restore maintenance gate", () => {
     const store = new MemoryStore(seeded.db);
     const projectID = store.createProject("Live writer").project!.projectID;
     store.update(projectID, { kind: "fact", title: "before", summary: "before" });
-    const backup = createVerifiedBackup(seeded.db, path, 10, 10, "test");
+    const backup = createVerifiedBackup(seeded.db, path, 11, 11, "test");
     seeded.close();
     const opened = openMemoryDatabase(path);
 

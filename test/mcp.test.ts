@@ -227,7 +227,7 @@ describe("project-scoped memory MCP server", () => {
     newer.exec("CREATE TABLE schema_state (version INTEGER PRIMARY KEY); INSERT INTO schema_state VALUES (99)");
     newer.close();
     expect(() => openMemoryDatabase(databasePath)).toThrow(
-      "database schema v99 is newer than supported v10",
+      "database schema v99 is newer than supported v11",
     );
     const unchanged = new Database(databasePath, { readonly: true });
     const notes = unchanged
@@ -241,27 +241,59 @@ describe("project-scoped memory MCP server", () => {
   test("imports same-project legacy associations while upgrading v7", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-associations-"));
     const databasePath = join(directory, "memory.sqlite");
-    const opened = openMemoryDatabase(databasePath);
-    const store = new MemoryStore(opened.db);
-    const alphaID = store.createProject("Alpha").project!.projectID;
-    const betaID = store.createProject("Beta").project!.projectID;
-    const first = store.update(alphaID, { kind: "fact", title: "first", summary: "first" }).id!;
-    const second = store.update(alphaID, { kind: "fact", title: "second", summary: "second" }).id!;
-    const other = store.update(betaID, { kind: "fact", title: "other", summary: "other" }).id!;
-    opened.db.exec(`
+    const alphaID = "11111111-1111-4111-8111-111111111111";
+    const betaID = "22222222-2222-4222-8222-222222222222";
+    const first = "note-first";
+    const second = "note-second";
+    const other = "note-other";
+    const legacy = new Database(databasePath, { create: true });
+    legacy.exec(`
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, normalized_name TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE notes (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, content TEXT NOT NULL,
+        size_class TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL,
+        supersedes_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE(project_id, id)
+      );
+      CREATE INDEX notes_project_idx ON notes(project_id, status);
+      CREATE TABLE note_edges (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL, target_id TEXT NOT NULL, predicate TEXT NOT NULL,
+        created_at INTEGER NOT NULL, UNIQUE(project_id, source_id, target_id, predicate),
+        FOREIGN KEY (project_id, source_id) REFERENCES notes(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, target_id) REFERENCES notes(project_id, id) ON DELETE CASCADE
+      );
+      CREATE INDEX note_edges_source_idx ON note_edges(project_id, source_id);
+      CREATE INDEX note_edges_target_idx ON note_edges(project_id, target_id);
+      CREATE VIRTUAL TABLE notes_fts USING fts5(
+        id UNINDEXED, title, summary, content, tokenize='unicode61'
+      );
+      CREATE TABLE schema_state (version INTEGER PRIMARY KEY);
       CREATE TABLE memory_associations (
         id TEXT PRIMARY KEY, left_item_id TEXT NOT NULL, right_item_id TEXT NOT NULL,
         kind TEXT NOT NULL, lifecycle_state TEXT NOT NULL, created_at INTEGER NOT NULL
       );
+      INSERT INTO schema_state VALUES (7);
     `);
-    opened.db
+    legacy.query("INSERT INTO projects VALUES (?, 'Alpha', 'alpha', 1, 1)").run(alphaID);
+    legacy.query("INSERT INTO projects VALUES (?, 'Beta', 'beta', 1, 1)").run(betaID);
+    const insertNote = legacy.query(
+      "INSERT INTO notes VALUES (?, ?, 'fact', ?, ?, '', 'inline', 0, 'active', NULL, 1, 1)",
+    );
+    insertNote.run(first, alphaID, "first", "first");
+    insertNote.run(second, alphaID, "second", "second");
+    insertNote.run(other, betaID, "other", "other");
+    legacy
       .query("INSERT INTO memory_associations VALUES ('same', ?, ?, 'SUPPORTS', 'active', 1)")
       .run(first, second);
-    opened.db
+    legacy
       .query("INSERT INTO memory_associations VALUES ('cross', ?, ?, 'related', 'active', 1)")
       .run(first, other);
-    opened.db.query("UPDATE schema_state SET version = 7").run();
-    opened.close();
+    legacy.close();
 
     const migrated = openMemoryDatabase(databasePath);
     const edges = migrated.db

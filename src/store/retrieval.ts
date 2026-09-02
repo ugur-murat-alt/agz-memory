@@ -1,8 +1,20 @@
 import type { Database } from "bun:sqlite";
 import { redactText } from "../capture/redact";
-import type { RetrievalBackend, RetrievalRequest, RankedHit } from "../retrieval/contract";
+import { deriveDocument } from "../retrieval/derived";
+import {
+  validateBackendHits,
+  type RetrievalBackend,
+  type RetrievalRequest,
+  type RankedHit,
+} from "../retrieval/contract";
 import { weightedReciprocalRankFusion } from "../retrieval/fusion";
 import type { RecallCard } from "../types";
+
+const MAX_CARDS = 8;
+const MAX_CHANNEL_RESULTS = 40;
+const MAX_SEMANTIC_QUERY_BYTES = 1_200;
+const MAX_SQL_IDS = 900;
+const MAX_SEMANTIC_TIMEOUT_MS = 120;
 
 export interface RetrievalResult {
   cards: RecallCard[];
@@ -18,10 +30,15 @@ export class RetrievalStore {
 
   async retrieve(request: RetrievalRequest): Promise<RetrievalResult> {
     const query = request.query.trim();
-    if (!query || request.limit <= 0 || Date.now() >= request.deadlineAt) {
+    const limit = boundedCardLimit(request.limit);
+    if (!query || limit === 0 || Date.now() >= request.deadlineAt) {
       return { cards: [], semanticFallback: false, rejectedBackendHits: 0 };
     }
-    const lexical = this.lexical(request.projectID, query, 40);
+    const lexical = this.lexical(request.projectID, query, MAX_CHANNEL_RESULTS);
+    if (Date.now() >= request.deadlineAt) {
+      return { cards: [], semanticFallback: false, rejectedBackendHits: 0 };
+    }
+
     let semantic: RankedHit[] = [];
     let semanticFallback = false;
     const queryRedaction = redactText(query);
@@ -31,43 +48,70 @@ export class RetrievalStore {
       queryRedaction.replacements === 0 &&
       Date.now() < request.deadlineAt
     ) {
-      const controller = new AbortController();
-      const timeoutMs = Math.max(1, Math.min(120, request.deadlineAt - Date.now()));
-      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const semanticQuery = truncateUtf8(query, MAX_SEMANTIC_QUERY_BYTES);
+      const remaining = request.deadlineAt - Date.now();
+      const timeoutMs = Math.max(1, Math.min(MAX_SEMANTIC_TIMEOUT_MS, remaining));
       try {
-        semantic = await Promise.race([
-          this.backend.query(request.projectID, query.slice(0, 1_200), 40, controller.signal),
-          new Promise<never>((_, reject) => {
-            timeout = setTimeout(() => {
-              controller.abort();
-              reject(new Error("semantic_timeout"));
-            }, timeoutMs);
-          }),
-        ]);
+        const result = await withHardTimeout(
+          (signal) => this.backend!.query(request.projectID, semanticQuery, MAX_CHANNEL_RESULTS, signal),
+          timeoutMs,
+          request.deadlineAt,
+        );
+        if (!validateBackendHits(result)) {
+          semanticFallback = true;
+        } else {
+          semantic = result;
+        }
       } catch {
         semanticFallback = true;
-      } finally {
-        if (timeout) clearTimeout(timeout);
       }
     }
+
+    if (Date.now() >= request.deadlineAt) {
+      return { cards: [], semanticFallback, rejectedBackendHits: 0 };
+    }
+
     let rejectedBackendHits = 0;
-    const validSemantic = semantic.filter((hit) => {
-      const row = this.note(request.projectID, hit.noteID);
-      const valid = Boolean(
-        row &&
-          row.status === "active" &&
-          (hit.revision === undefined || hit.revision === row.current_revision) &&
-          (hit.contentHash === undefined || hit.contentHash === row.content_hash),
-      );
-      if (!valid) rejectedBackendHits++;
-      return valid;
-    });
-    const direct = [...lexical, ...validSemantic];
-    const graph = this.graph(request.projectID, direct.slice(0, 10).map((hit) => hit.noteID), 30);
-    const fused = weightedReciprocalRankFusion([...direct, ...graph]);
+    let validSemantic: RankedHit[] = [];
+    if (semantic.length > 0) {
+      const semanticRows = this.notes(request.projectID, uniqueIDs(semantic.map((hit) => hit.noteID)));
+      validSemantic = semantic.filter((hit) => {
+        const row = semanticRows.get(hit.noteID);
+        const derived = row && row.status === "active" ? deriveDocument(toDocumentSource(row)) : undefined;
+        const valid = Boolean(
+          hit.channel === "semantic" &&
+            row &&
+            row.status === "active" &&
+            hit.revision === row.current_revision &&
+            derived &&
+            hit.contentHash === derived.contentHash,
+        );
+        if (!valid) rejectedBackendHits++;
+        return valid;
+      });
+      validSemantic.sort(compareRankedHits);
+      validSemantic = validSemantic.slice(0, MAX_CHANNEL_RESULTS);
+    }
+
+    if (Date.now() >= request.deadlineAt) {
+      return { cards: [], semanticFallback, rejectedBackendHits };
+    }
+
+    const direct = [...lexical, ...validSemantic].sort(compareRankedHits);
+    const graph = this.graph(
+      request.projectID,
+      uniqueIDs(direct.map((hit) => hit.noteID)).slice(0, 10),
+      30,
+    );
+    if (Date.now() >= request.deadlineAt) {
+      return { cards: [], semanticFallback, rejectedBackendHits };
+    }
+
+    const fused = weightedReciprocalRankFusion([...direct, ...graph].sort(compareRankedHits));
+    const rowsByID = this.notes(request.projectID, uniqueIDs(fused.map((hit) => hit.noteID)));
     const rows = fused
       .map((hit) => {
-        const row = this.note(request.projectID, hit.noteID);
+        const row = rowsByID.get(hit.noteID);
         if (!row || row.status !== "active") return undefined;
         return { hit, row };
       })
@@ -80,8 +124,19 @@ export class RetrievalStore {
         right.row.updated_at - left.row.updated_at ||
         left.row.id.localeCompare(right.row.id),
     );
-    const graphPredicates = this.graphPredicates(request.projectID, rows.map(({ row }) => row.id));
-    const cards = rows.slice(0, request.limit).map(({ hit, row }) => ({
+    if (Date.now() >= request.deadlineAt) {
+      return { cards: [], semanticFallback, rejectedBackendHits };
+    }
+
+    const selectedRows = rows.slice(0, limit);
+    const graphPredicates = this.graphPredicates(
+      request.projectID,
+      selectedRows.map(({ row }) => row.id),
+    );
+    if (Date.now() >= request.deadlineAt) {
+      return { cards: [], semanticFallback, rejectedBackendHits };
+    }
+    const cards = selectedRows.map(({ hit, row }) => ({
       id: row.id,
       projectID: row.project_id,
       projectName: row.project_name,
@@ -93,7 +148,7 @@ export class RetrievalStore {
       pinned: row.pinned === 1,
       via: hit.matchedCandidate ? ("match" as const) : ("neighbor" as const),
       ...(!hit.matchedCandidate && graphPredicates.has(row.id)
-        ? { predicates: [...graphPredicates.get(row.id)!] }
+        ? { predicates: [...graphPredicates.get(row.id)!].sort() }
         : {}),
     }));
     return { cards, semanticFallback, rejectedBackendHits };
@@ -128,12 +183,13 @@ export class RetrievalStore {
   private graph(projectID: string, noteIDs: readonly string[], limit: number): RankedHit[] {
     if (noteIDs.length === 0) return [];
     const values = noteIDs.map(() => "?").join(",");
+    const endpoint = `CASE WHEN e.source_id IN (${values}) THEN e.target_id ELSE e.source_id END`;
     const rows = this.db
       .query(`
-        SELECT DISTINCT CASE WHEN e.source_id IN (${values}) THEN e.target_id ELSE e.source_id END AS id
+        SELECT DISTINCT ${endpoint} AS id
           FROM note_edges e
           JOIN notes n
-            ON n.id = CASE WHEN e.source_id IN (${values}) THEN e.target_id ELSE e.source_id END
+            ON n.id = ${endpoint}
          WHERE e.project_id = ?
            AND (e.source_id IN (${values}) OR e.target_id IN (${values}))
            AND n.project_id = ? AND n.status = 'active'
@@ -180,14 +236,23 @@ export class RetrievalStore {
     return result;
   }
 
-  private note(projectID: string, noteID: string): NoteRow | undefined {
-    return this.db
-      .query(`
-        SELECT n.*, p.name AS project_name
-          FROM notes n JOIN projects p ON p.id = n.project_id
-         WHERE n.project_id = ? AND n.id = ?
-      `)
-      .get(projectID, noteID) as NoteRow | undefined;
+  private notes(projectID: string, noteIDs: readonly string[]): Map<string, NoteRow> {
+    const result = new Map<string, NoteRow>();
+    const unique = uniqueIDs(noteIDs);
+    for (let offset = 0; offset < unique.length; offset += MAX_SQL_IDS) {
+      const chunk = unique.slice(offset, offset + MAX_SQL_IDS);
+      if (chunk.length === 0) continue;
+      const values = chunk.map(() => "?").join(",");
+      const rows = this.db
+        .query(`
+          SELECT n.*, p.name AS project_name
+            FROM notes n JOIN projects p ON p.id = n.project_id
+           WHERE n.project_id = ? AND n.id IN (${values})
+        `)
+        .all(projectID, ...chunk) as NoteRow[];
+      for (const row of rows) result.set(row.id, row);
+    }
+    return result;
   }
 }
 
@@ -205,4 +270,84 @@ interface NoteRow {
   current_revision: number;
   content_hash: string;
   updated_at: number;
+}
+
+function boundedCardLimit(limit: number): number {
+  if (!Number.isFinite(limit)) return 0;
+  return Math.min(MAX_CARDS, Math.max(0, Math.floor(limit)));
+}
+
+function uniqueIDs(ids: readonly string[]): string[] {
+  return [...new Set(ids)];
+}
+
+function compareRankedHits(left: RankedHit, right: RankedHit): number {
+  return (
+    left.channel.localeCompare(right.channel) ||
+    left.rank - right.rank ||
+    left.noteID.localeCompare(right.noteID) ||
+    (left.score ?? 0) - (right.score ?? 0) ||
+    (left.revision ?? 0) - (right.revision ?? 0) ||
+    (left.contentHash ?? "").localeCompare(right.contentHash ?? "")
+  );
+}
+
+function toDocumentSource(row: NoteRow) {
+  return {
+    projectID: row.project_id,
+    noteID: row.id,
+    revision: row.current_revision,
+    kind: row.kind,
+    title: row.title,
+    summary: row.summary,
+    content: row.content,
+  };
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  let result = "";
+  let bytes = 0;
+  for (const character of value) {
+    const encoded = Buffer.from(character, "utf8");
+    if (bytes + encoded.length > maxBytes) break;
+    result += character;
+    bytes += encoded.length;
+  }
+  return result;
+}
+
+async function withHardTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  deadlineAt: number,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const pending = Promise.resolve().then(() => operation(controller.signal));
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const finish = (callback: () => void) => {
+        if (timer) clearTimeout(timer);
+        callback();
+      };
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        finish(() => reject(new Error("semantic_timeout")));
+      }, Math.max(1, Math.min(timeoutMs, deadlineAt - Date.now())));
+      pending.then(
+        (value) => {
+          if (timedOut) return;
+          finish(() => resolve(value));
+        },
+        (error) => {
+          if (timedOut) return;
+          finish(() => reject(error));
+        },
+      );
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
