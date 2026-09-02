@@ -63,6 +63,7 @@ describe("MCP compatibility surface", () => {
 
     expect(client.getServerVersion()).toEqual({ name: "agz-memory", version: PRODUCT_VERSION });
     expect(client.getInstructions()).toBe(MEMORY_GUIDANCE);
+    expect(client.getInstructions()).toMatchSnapshot();
     const { tools } = await client.listTools();
     expect(
       tools

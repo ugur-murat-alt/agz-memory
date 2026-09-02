@@ -30,7 +30,8 @@ jobs:
           cd "$RUNNER_TEMP/agz-install"
           npm init -y
           npm install --ignore-scripts \
-            "$RUNNER_TEMP/agz-pack/vaur94-agz-memory-0.4.1.tgz" \
-            "$RUNNER_TEMP/agz-pack/vaur94-agz-memory-plugin-0.4.1.tgz"
+            "$RUNNER_TEMP/agz-pack/vaur94-agz-memory-0.4.2.tgz" \
+            "$RUNNER_TEMP/agz-pack/vaur94-agz-memory-plugin-0.4.2.tgz"
           npm audit --audit-level=moderate
           bun -e 'await import("@vaur94/agz-memory/core"); await import("@vaur94/agz-memory-plugin")'
+          bun -e 'const c=await Bun.file("node_modules/@vaur94/agz-memory/skills/index.json").json(); const s=await Bun.file("node_modules/@vaur94/agz-memory/skills/agz-memory/agz-memory.md").text(); if(Object.keys(c).join()!=="skills"||c.skills?.length!==1||Object.keys(c.skills[0]).sort().join()!=="files,name,version"||c.skills[0]?.version!=="0.4.2"||!s.startsWith("---\nname: AGZ Memory\ndescription: Use project-scoped")||!s.includes("\nslash: false\n---\n")) throw new Error("invalid packaged skill catalog")'

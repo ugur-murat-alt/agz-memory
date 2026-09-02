@@ -32,8 +32,8 @@ bağlam eklemez.
 
 | Bileşen | Desteklenen sürüm |
 |---|---|
-| Çekirdek ve MCP | `0.4.1` |
-| OpenCode eklentisi | `0.4.1` |
+| Çekirdek ve MCP | `0.4.2` |
+| OpenCode eklentisi | `0.4.2` |
 | OpenCode V2 | `0.0.0-beta-18743` |
 | `@opencode-ai/plugin` | `0.0.0-beta-18743` |
 | Bun | `>=1.3.14` |
@@ -47,18 +47,21 @@ MCP sunucusu bir OpenCode beta sürümüne bağlı değildir. İsteğe bağlı e
 Sunucuyu doğrudan çalıştırın:
 
 ```sh
-bunx @vaur94/agz-memory@0.4.1
+bunx @vaur94/agz-memory@0.4.2
 ```
 
 Ya da OpenCode V2 içinde `mcp.servers` altına kaydedin:
 
 ```jsonc
 {
+  "skills": [
+    "https://raw.githubusercontent.com/ugur-murat-alt/agz-memory/v0.4.2/skills/"
+  ],
   "mcp": {
     "servers": {
       "agz-memory": {
         "type": "local",
-        "command": ["bunx", "@vaur94/agz-memory@0.4.1"],
+        "command": ["bunx", "@vaur94/agz-memory@0.4.2"],
         "environment": {
           "OPENCODE_MEMORY_DATABASE_PATH": "{env:OPENCODE_MEMORY_DATABASE_PATH}"
         },
@@ -68,6 +71,21 @@ Ya da OpenCode V2 içinde `mcp.servers` altına kaydedin:
   }
 }
 ```
+
+npm paketi, sürümlenmiş `agz-memory` skill kataloğunu taşır. Skill, ajanın
+gerektiğinde yüklediği iş akışı talimatıdır; yalnız npm kurulumu onu
+keşfedilebilir yapmaz. Yukarıdaki açık `skills` girdisi OpenCode'un aynı iş
+akışını indirip ajana tanıtmasını sağlar. MCP bu girdi olmadan da tam
+kullanılabilir; sunucu her bağlantıda kısa `initialize` talimatlarını ve eksiksiz
+araç şemalarını sunar.
+
+Kurulum `~/.config/opencode/AGENTS.md` dosyasını değiştirmemelidir. Bu dosya
+eklenti kurulum yüzeyi değil, kullanıcının tüm projeler için sahip olduğu genel
+ajan politikasıdır. Ekipler kendi hafıza politikalarını orada tutabilir, ancak
+AGZ Memory buna ihtiyaç duymaz. `codemode: false`, küçük ve sabit katalog için
+bilinçli seçimdir; dokuz aracın tümünü doğrudan gösterir. Code Mode açılırsa da
+sunucu talimatları, araç açıklamaları ve isteğe bağlı skill aynı iş akışını
+tanımlar.
 
 Varsayılan veritabanı
 `~/.local/share/opencode-memory/memory.sqlite` konumundadır. Başka bir yol için
@@ -114,7 +132,7 @@ ayarlarla ekleyin:
 {
   "plugins": [
     {
-      "package": "@vaur94/agz-memory-plugin@0.4.1",
+      "package": "@vaur94/agz-memory-plugin@0.4.2",
       "options": {
         "mode": "off",
         "autoCreateProjects": false,
@@ -187,11 +205,11 @@ kapılarından geçene kadar `semanticBackend` değeri `none` olmalıdır.
 Yönetim aracı aynı `OPENCODE_MEMORY_DATABASE_PATH` değerini okur:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin doctor
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin backup
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin upgrade --to 10
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin capture status
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin outbox status
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin upgrade --to 10
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin outbox status
 ```
 
 Yükseltmeler özel bir geçiş kilidi alır ve veritabanını değiştirmeden önce
@@ -200,7 +218,7 @@ dener. Geri yükleme ve yedek silme işlemleri önce deneme çıktısı, sonra a
 onay değerleri ister; bu değerleri tahmin etmeyin.
 
 Tam prova için [yedekleme ve geri yükleme runbook'unu](docs/backup-restore-runbook.tr.md)
-kullanın. Final `0.4.1` yedek manifestleri `agz-memory-backup/1` kullanır;
+kullanın. Final `0.4.2` yedek manifestleri `agz-memory-backup/1` kullanır;
 ön sürüm manifestleri onları oluşturan ön sürümle işlenmelidir.
 
 ## Güvenlik Modeli

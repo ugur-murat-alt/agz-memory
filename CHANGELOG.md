@@ -3,6 +3,25 @@
 All notable changes to AGZ Memory are recorded here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-09-02
+
+### Added
+
+- Added a versioned `agz-memory` OpenCode skill catalog to the core npm package
+  and documented the explicit immutable skill source used for discovery.
+
+### Changed
+
+- Expanded MCP `initialize` guidance so an unfamiliar agent reuses the correct
+  durable project, recalls before relying on history, records only verified
+  outcomes, and handles non-atomic or destructive mutations safely.
+- Added field-level descriptions to the nine tool schemas, including directed
+  link semantics, note content behavior, batch ordering, and selector roles.
+- Corrected MCP tool annotations for closed-world operation, destructive
+  rename/unpin behavior, and safe idempotent retries.
+- Documented that npm installation does not itself activate a skill and that
+  installers must not modify the user's ambient global `AGENTS.md` policy.
+
 ## [0.4.1] - 2026-09-01
 
 ### Fixed
@@ -74,6 +93,7 @@ All notable changes to AGZ Memory are recorded here. The project follows
 - Preserved the nine-tool MCP interface and project-isolation guarantees while
   establishing the AGZ Memory public packages and repository.
 
+[0.4.2]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.4.0
 [0.4.0-beta.1]: https://github.com/ugur-murat-alt/agz-memory/releases/tag/v0.4.0-beta.1

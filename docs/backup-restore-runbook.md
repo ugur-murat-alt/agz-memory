@@ -2,7 +2,7 @@
 
 English | [Türkçe](backup-restore-runbook.tr.md)
 
-This runbook applies to `@vaur94/agz-memory@0.4.1` and SQLite schema v10.
+This runbook applies to `@vaur94/agz-memory@0.4.2` and SQLite schema v10.
 
 ## Preconditions
 
@@ -25,16 +25,16 @@ Do not proceed with a guessed or empty path.
 Run a read-only health report first:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin doctor
 ```
 
 `ok` must be `true`. Record `schemaVersion`, row counts, and invariant counts.
 Then create a standalone verified backup and upgrade:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin backup
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin upgrade --to 10
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin upgrade --to 10
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin doctor
 ```
 
 The upgrade itself creates another verified pre-migration backup when the
@@ -54,16 +54,16 @@ The manifest format is `agz-memory-backup/1`. `agz-memory-admin restore` verifie
 that the manifest and database are regular files in the same backup directory,
 then checks size, SHA-256, SQLite integrity, foreign keys, and row counts.
 
-Final `0.4.1` does not accept prerelease manifest formats. Use the originating
+Final `0.4.2` does not accept prerelease manifest formats. Use the originating
 prerelease to restore such a backup, run its doctor check, and only then upgrade
-that restored database with `0.4.1`.
+that restored database with `0.4.2`.
 
 ## Restore Rehearsal
 
 Keep all writers stopped. First request a dry run by omitting confirmation:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin restore \
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin restore \
   "$OPENCODE_MEMORY_DATABASE_PATH.backup/<backup>.manifest.json"
 ```
 
@@ -71,7 +71,7 @@ Compare `targetPath`, `sourceSchema`, `targetSchema`, row counts, size, and
 SHA-256 with the recorded backup. Then use the exact manifest hash:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin restore \
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin restore \
   "$OPENCODE_MEMORY_DATABASE_PATH.backup/<backup>.manifest.json" \
   --sha256 <manifest-database-sha256> \
   --confirm RESTORE_DATABASE_FROM_VERIFIED_BACKUP
@@ -84,9 +84,9 @@ database passes all checks.
 ## Post-Restore Validation
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin doctor
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin capture status
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin outbox status
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin outbox status
 ```
 
 Start only the MCP server and perform read-only `project_list`, `memory_recall`,
@@ -104,7 +104,7 @@ style error first if uncertain. Break only a proven stale lock with the exact
 owner ID and confirmation:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin unlock \
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin unlock \
   --owner <owner-id> \
   --confirm BREAK_STALE_MIGRATION_LOCK
 ```
@@ -118,13 +118,13 @@ The first command is non-destructive and returns a digest over the exact backup
 set:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin backup prune
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin backup prune
 ```
 
 Review every listed manifest/database pair. Delete only that unchanged set:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.4.1 agz-memory-admin backup prune \
+bunx --package @vaur94/agz-memory@0.4.2 agz-memory-admin backup prune \
   --digest <dry-run-digest> \
   --confirm DELETE_VERIFIED_BACKUPS
 ```

@@ -1,0 +1,17 @@
+$ rm -rf dist && bun build src/index.ts --target bun --format esm --packages external --outfile dist/server.js && bun build src/core.ts --target bun --format esm --packages external --outfile dist/core.js && bun build src/admin/index.ts --target bun --format esm --packages external --outfile dist/admin.js && bunx tsc -p tsconfig.build.json && bun run --cwd packages/opencode-plugin build
+Bundled 22 modules in 7ms
+
+  server.js  104.18 KB  (entry point)
+
+Bundled 25 modules in 4ms
+
+  core.js  106.1 KB  (entry point)
+
+Bundled 17 modules in 4ms
+
+  admin.js  66.97 KB  (entry point)
+
+$ rm -rf dist && bun build src/index.ts --target bun --format esm --packages external --outfile dist/index.js && bunx tsc -p tsconfig.build.json
+Bundled 6 modules in 4ms
+
+  index.js  26.31 KB  (entry point)

@@ -10,7 +10,7 @@ body:
     id: package-version
     attributes:
       label: AGZ Memory package and version
-      placeholder: "@vaur94/agz-memory@0.4.1"
+      placeholder: "@vaur94/agz-memory@0.4.2"
     validations:
       required: true
   - type: input

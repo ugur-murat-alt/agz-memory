@@ -286,6 +286,19 @@ describe("project-scoped memory MCP server", () => {
       "project_list",
       "project_update",
     ]);
+    expect(
+      Object.fromEntries(tools.map(({ name, annotations }) => [name, annotations])),
+    ).toEqual({
+      memory_link: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      memory_pin: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      memory_read: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      memory_recall: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      memory_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      project_create: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      project_delete: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      project_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      project_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    });
     const deletion = tools.find(({ name }) => name === "project_delete")!;
     expect(deletion.annotations?.destructiveHint).toBe(true);
     expect(
@@ -492,6 +505,13 @@ describe("project-scoped memory MCP server", () => {
       name: "memory_link",
       arguments: { projectID, sourceID: first, targetID: second, predicate: "ABOUT" },
     });
+    const repeatedLink = parseTextResult(
+      await client.callTool({
+        name: "memory_link",
+        arguments: { projectID, sourceID: first, targetID: second, predicate: "ABOUT" },
+      }),
+    );
+    expect(repeatedLink.results[0].ok).toBe(true);
     await client.callTool({
       name: "memory_pin",
       arguments: { projectID, id: first, pinned: true },
@@ -531,6 +551,17 @@ describe("project-scoped memory MCP server", () => {
       projectID,
       deletedCounts: { notes: 2, edges: 1, pinned: 1 },
     });
+    const repeated = parseTextResult(
+      await client.callTool({
+        name: "project_delete",
+        arguments: {
+          projectID,
+          confirmProjectName: "Disposable",
+          confirmation: "DELETE_PROJECT_AND_ALL_MEMORY",
+        },
+      }),
+    );
+    expect(repeated.results[0].ok).toBe(false);
     const listed = parseTextResult(
       await client.callTool({ name: "project_list", arguments: {} }),
     );

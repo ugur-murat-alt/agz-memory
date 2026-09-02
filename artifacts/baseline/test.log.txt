@@ -1,0 +1,90 @@
+bun test v1.3.14 (0d9b296a)
+
+test/mcp.test.ts:
+[agz-memory] v2→v3 migration complete: 2 notes, 0 edges (backup: /tmp/agz-memory-legacy-UcJDdC/memory.sqlite.v2-backup)
+[agz-memory] migrated to v10 (backup: /tmp/agz-memory-legacy-UcJDdC/memory.sqlite.backup/schema-v2-2026-09-02T07-42-18-482Z-98b90007-03ac-4522-a36f-b7b8dde00bb2.manifest.json)
+(pass) project-scoped memory MCP server > migrates core legacy notes into a UUID project [188.22ms]
+[agz-memory] migrated to v10 (backup: /tmp/agz-memory-v5-rl9N4a/memory.sqlite.backup/schema-v5-2026-09-02T07-42-18-604Z-fc9c24b5-d07c-4a37-86fb-6d6eb82cfbe1.manifest.json)
+(pass) project-scoped memory MCP server > migrates v5 notes and rebuilds project-scoped search [103.33ms]
+[agz-memory] migrated to v10 (backup: /tmp/agz-memory-pinned-9Puoyl/memory.sqlite.backup/schema-v4-2026-09-02T07-42-18-710Z-6b1a19a8-b1d0-4cd3-b190-1aa2bd1ffa1f.manifest.json)
+(pass) project-scoped memory MCP server > preserves pin state from an older schema [108.42ms]
+[agz-memory] migrated to v10 (backup: /tmp/agz-memory-project-id-yFcjd7/memory.sqlite.backup/schema-v6-2026-09-02T07-42-18-832Z-02be2e04-07a3-4541-8a90-d45696a5406e.manifest.json)
+(pass) project-scoped memory MCP server > rekeys existing non-UUID projects without changing their names [124.20ms]
+(pass) project-scoped memory MCP server > rejects a database created by a newer schema without adding tables [26.54ms]
+[agz-memory] migrated to v10 (backup: /tmp/agz-memory-associations-1spLfi/memory.sqlite.backup/schema-v7-2026-09-02T07-42-18-966Z-2c0393f7-ea4f-4884-ba28-3d9db83770ff.manifest.json)
+(pass) project-scoped memory MCP server > imports same-project legacy associations while upgrading v7 [98.93ms]
+(pass) project-scoped memory MCP server > publishes nine tools with explicit destructive project deletion [77.73ms]
+(pass) project-scoped memory MCP server > creates, lists, and safely renames projects [58.97ms]
+(pass) project-scoped memory MCP server > isolates notes, search, graph, and pin state by project [139.65ms]
+(pass) project-scoped memory MCP server > enforces project edge integrity and cleans project storage [47.34ms]
+(pass) project-scoped memory MCP server > requires exact confirmations and deletes all project memory [64.63ms]
+(pass) project-scoped memory MCP server > serves the project tools through the stdio entrypoint [192.39ms]
+
+test/store/outbox.test.ts:
+(pass) outbox worker > delivers project FIFO operations idempotently and leaves canonical writes committed [60.20ms]
+
+test/store/lifecycle.test.ts:
+(pass) note lifecycle > records idempotent revisions and durable derived-index outbox operations [37.74ms]
+
+test/db/backup-restore.test.ts:
+(pass) backup, restore, and migration lock > verifies a backup and restores it without overwriting the previous database [94.71ms]
+(pass) backup, restore, and migration lock > keeps the live database intact when an active reader blocks the WAL checkpoint [62.94ms]
+(pass) backup, restore, and migration lock > restores a verified backup over an unhealthy target and preserves the corrupt source [67.79ms]
+(pass) backup, restore, and migration lock > rejects escaped backup files and binds prune confirmation to manifest contents [58.47ms]
+(pass) backup, restore, and migration lock > serializes live migration owners and only breaks a verified stale owner [31.59ms]
+(pass) backup, restore, and migration lock > does not publish a migration lock when its owner record cannot be staged [0.25ms]
+
+test/db/migration-v9.test.ts:
+[agz-memory] migrated to v10 (backup: /tmp/agz-memory-v8-v10-Zu2Kvu/memory.sqlite.backup/schema-v8-2026-09-02T07-42-20-131Z-d6780133-1f57-47dd-8b60-b767b1ff7f0c.manifest.json)
+(pass) schema migration > preserves v8 rows and creates schema v10 revision, provenance, FTS, and backup [156.79ms]
+
+test/db/migration-v10.test.ts:
+[agz-memory] migrated to v10 (backup: /tmp/agz-memory-v9-v10-2BTiUH/memory.sqlite.backup/schema-v9-2026-09-02T07-42-20-303Z-7ebe06ef-95c7-44a7-9db3-0068ba6d6cdc.manifest.json)
+(pass) schema v10 migration > preserves v9 capture rows while replacing their retired contract [153.57ms]
+(pass) schema v10 migration > creates one correctly labeled backup across concurrent openers [932.27ms]
+(pass) schema v10 migration > reopens the canonical database after a waiting connection is replaced [547.73ms]
+
+test/capture/capture.test.ts:
+(pass) capture safety core > uses stable native identity hashes and strict bounded events [0.54ms]
+(pass) capture safety core > projects only text parts and redacts credentials before persistence [0.16ms]
+(pass) capture safety core > stores one event per native identity, quarantines private keys, and materializes explicit memory [35.45ms]
+(pass) capture safety core > atomically supersedes only an explicit matching target [31.41ms]
+(pass) capture safety core > drains terminal retention backlog while preserving fresh and pending records [738.17ms]
+
+test/contract/mcp-surface.test.ts:
+(pass) MCP compatibility surface > keeps final persisted and configuration identities stable [0.34ms]
+(pass) MCP compatibility surface > keeps initialize identity, instructions, and exact tool catalog stable [33.09ms]
+(pass) MCP compatibility surface > preserves ordered non-atomic batch completion [34.28ms]
+
+test/release/release-surface.test.ts:
+(pass) release surface > accepts the final repository surface [4.59ms]
+(pass) release surface > rejects package version drift [3.43ms]
+(pass) release surface > rejects bilingual section drift [3.22ms]
+(pass) release surface > rejects a reintroduced retired name [3.01ms]
+(pass) release surface > rejects skill catalog version drift [3.55ms]
+(pass) release surface > rejects stale active release pins outside the changelog [3.49ms]
+(pass) release surface > rejects extra HTTP catalog entries [3.28ms]
+(pass) release surface > rejects unexpected HTTP catalog fields [3.25ms]
+(pass) release surface > rejects missing skill frontmatter boundaries [2.98ms]
+(pass) release surface > rejects an empty skill description [3.79ms]
+
+test/retrieval/retrieval.test.ts:
+(pass) hybrid retrieval > keeps active project filtering and rejects stale or cross-project backend hits [37.07ms]
+(pass) hybrid retrieval > formats summary-only untrusted context within hard limits [0.53ms]
+
+packages/opencode-plugin/test/plugin.test.ts:
+(pass) OpenCode V2 memory plugin > uses strict safe defaults and refuses unproven semantic backends [0.37ms]
+{"component":"agz-memory-plugin","operation":"setup","outcome":"disabled","error_code":"invalid_configuration"}
+(pass) OpenCode V2 memory plugin > disables safely when configuration is invalid [0.59ms]
+{"component":"agz-memory-plugin","operation":"setup","outcome":"disabled","error_code":"database_unavailable"}
+(pass) OpenCode V2 memory plugin > disposes partial hook registration when setup fails [32.24ms]
+(pass) OpenCode V2 memory plugin > deduplicates prompt retries in shadow capture [61.12ms]
+(pass) OpenCode V2 memory plugin > reruns reconciliation when another terminal event arrives in flight [45.05ms]
+(pass) OpenCode V2 memory plugin > injects one bounded untrusted block and never persists it [32.21ms]
+(pass) OpenCode V2 memory plugin > honors memory off for the full turn and resumes on the next prompt [53.35ms]
+(pass) OpenCode V2 memory plugin > reconstructs memory off after a mid-turn runtime restart [23.59ms]
+
+ 52 pass
+ 0 fail
+ 2 snapshots, 213 expect() calls
+Ran 52 tests across 11 files. [4.89s]

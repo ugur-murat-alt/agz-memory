@@ -5,6 +5,13 @@ const CORE_PACKAGE = "@vaur94/agz-memory";
 const PLUGIN_PACKAGE = "@vaur94/agz-memory-plugin";
 const RETIRED_NAME = ["opencode", "2", "-memory"].join("");
 const RETIRED_VERSION = ["0.4.0", "beta.1"].join("-");
+const PREVIOUS_VERSION = ["0.4", ".1"].join("");
+const SKILL_FRONTMATTER = `---
+name: AGZ Memory
+description: Use project-scoped AGZ Memory for durable facts and decisions across sessions; recall relevant history and safely store verified outcomes.
+slash: false
+---
+`;
 
 const README_SECTIONS = [
   ["Why AGZ Memory", "Neden AGZ Memory"],
@@ -59,6 +66,8 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
     "docs/backup-restore-runbook.tr.md",
     "packages/opencode-plugin/README.md",
     "packages/opencode-plugin/README.tr.md",
+    "skills/index.json",
+    "skills/agz-memory/agz-memory.md",
   ];
   for (const path of required) {
     if (!files.has(path)) errors.push(`missing required release file: ${path}`);
@@ -68,6 +77,9 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
     if (content.includes(RETIRED_NAME)) errors.push(`${path}: contains retired project name`);
     if (path !== "CHANGELOG.md" && content.includes(RETIRED_VERSION)) {
       errors.push(`${path}: contains retired package version`);
+    }
+    if (path !== "CHANGELOG.md" && content.includes(PREVIOUS_VERSION)) {
+      errors.push(`${path}: contains previous active package version`);
     }
   }
 
@@ -85,7 +97,7 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
   if (version && dependency !== version) {
     errors.push(`plugin dependency on ${CORE_PACKAGE} must equal ${version}`);
   }
-  if (version && version !== "0.4.1") errors.push(`final package version must be 0.4.1, found ${version}`);
+  if (version && version !== "0.4.2") errors.push(`final package version must be 0.4.2, found ${version}`);
 
   if (version) {
     requireText(files, "src/version.ts", `PRODUCT_VERSION = "${version}"`, errors);
@@ -99,7 +111,14 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
     requireText(files, "README.md", `${PLUGIN_PACKAGE}@${version}`, errors);
     requireText(files, "README.tr.md", `${CORE_PACKAGE}@${version}`, errors);
     requireText(files, "README.tr.md", `${PLUGIN_PACKAGE}@${version}`, errors);
+    requireText(files, "packages/opencode-plugin/README.md", `${CORE_PACKAGE}@${version}`, errors);
+    requireText(files, "packages/opencode-plugin/README.md", `${PLUGIN_PACKAGE}@${version}`, errors);
+    requireText(files, "packages/opencode-plugin/README.tr.md", `${CORE_PACKAGE}@${version}`, errors);
+    requireText(files, "packages/opencode-plugin/README.tr.md", `${PLUGIN_PACKAGE}@${version}`, errors);
     requireText(files, "CHANGELOG.md", `## [${version}] - `, errors);
+    const skillSource = `https://raw.githubusercontent.com/ugur-murat-alt/agz-memory/v${version}/skills/`;
+    requireText(files, "README.md", skillSource, errors);
+    requireText(files, "README.tr.md", skillSource, errors);
   }
   requireText(files, "src/types.ts", "SCHEMA_VERSION = 10", errors);
   requireText(files, "README.md", "| SQLite schema | `10` |", errors);
@@ -118,11 +137,52 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
   if (!filesList.includes("docs/backup-restore-runbook.tr.md")) {
     errors.push("core package files must include the Turkish runbook");
   }
+  if (!filesList.includes("skills/index.json") || !filesList.includes("skills/agz-memory/agz-memory.md")) {
+    errors.push("core package files must include the versioned agz-memory skill catalog");
+  }
+  validateSkillCatalog(files, version, errors);
   const pluginFiles = Array.isArray(pluginPackage?.files) ? pluginPackage.files : [];
   if (!pluginFiles.includes("README.tr.md")) {
     errors.push("plugin package files must include README.tr.md");
   }
   return errors;
+}
+
+function validateSkillCatalog(
+  files: ReadonlyMap<string, string>,
+  version: string | undefined,
+  errors: string[],
+): void {
+  const catalog = parsePackage(files, "skills/index.json", errors);
+  if (JSON.stringify(Object.keys(catalog ?? {}).sort()) !== JSON.stringify(["skills"])) {
+    errors.push("skills/index.json: root fields must contain only skills");
+  }
+  const skills = Array.isArray(catalog?.skills) ? catalog.skills : [];
+  if (skills.length !== 1) {
+    errors.push("skills/index.json: must contain exactly one skill");
+  }
+  const skill = skills[0];
+  if (!skill || typeof skill !== "object" || Array.isArray(skill)) {
+    errors.push("skills/index.json: must define the agz-memory skill");
+    return;
+  }
+  const record = skill as Record<string, unknown>;
+  if (
+    JSON.stringify(Object.keys(record).sort()) !==
+    JSON.stringify(["files", "name", "version"])
+  ) {
+    errors.push("skills/index.json: skill fields must be files, name, and version");
+  }
+  if (record.name !== "agz-memory") errors.push("skills/index.json: unexpected skill name");
+  if (version && record.version !== version) {
+    errors.push(`skills/index.json: skill version must equal ${version}`);
+  }
+  if (JSON.stringify(record.files) !== JSON.stringify(["agz-memory.md"])) {
+    errors.push("skills/index.json: agz-memory files must contain agz-memory.md");
+  }
+  if (!files.get("skills/agz-memory/agz-memory.md")?.startsWith(SKILL_FRONTMATTER)) {
+    errors.push("skills/agz-memory/agz-memory.md: invalid required frontmatter");
+  }
 }
 
 export function assertReleaseSurface(root: string): void {

@@ -1,0 +1,22 @@
+ M .github/ISSUE_TEMPLATE/bug_report.yml
+ M .github/workflows/ci.yml
+ M ARCHITECTURE.md
+ M CHANGELOG.md
+ M README.md
+ M README.tr.md
+ M docs/backup-restore-runbook.md
+ M docs/backup-restore-runbook.tr.md
+ M package.json
+ M packages/opencode-plugin/README.md
+ M packages/opencode-plugin/README.tr.md
+ M packages/opencode-plugin/package.json
+ M packages/opencode-plugin/src/version.ts
+ M scripts/verify-release.ts
+ M src/context.ts
+ M src/tools.ts
+ M src/version.ts
+ M test/contract/__snapshots__/mcp-surface.test.ts.snap
+ M test/contract/mcp-surface.test.ts
+ M test/mcp.test.ts
+ M test/release/release-surface.test.ts
+?? skills/

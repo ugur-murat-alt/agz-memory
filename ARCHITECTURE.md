@@ -1,6 +1,6 @@
 # AGZ Memory Architecture
 
-This document describes the `0.4.1` runtime and SQLite schema v10.
+This document describes the `0.4.2` runtime and SQLite schema v10.
 
 ## System Boundaries
 
@@ -20,7 +20,7 @@ OpenCode V2 beta-18743
 
 SQLite outbox
   -> optional derived retrieval backend
-     -> disabled in 0.4.1; backend = none
+     -> disabled in 0.4.2; backend = none
 ```
 
 The MCP adapter owns tool schemas, annotations, and result envelopes. The core
@@ -128,7 +128,7 @@ original OpenCode context unchanged.
 
 Semantic providers implement an optional backend contract: project-filtered
 query, idempotent upsert, deterministic delete, full project purge, and health.
-No provider is enabled in `0.4.1`. The SQLite lexical/graph path remains fully
+No provider is enabled in `0.4.2`. The SQLite lexical/graph path remains fully
 functional without one.
 
 ## Derived Index Outbox

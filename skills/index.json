@@ -1,0 +1,9 @@
+{
+  "skills": [
+    {
+      "name": "agz-memory",
+      "version": "0.4.2",
+      "files": ["agz-memory.md"]
+    }
+  ]
+}
