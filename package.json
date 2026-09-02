@@ -37,7 +37,7 @@
   "scripts": {
     "types": "rm -rf dist/types && bunx tsc -p tsconfig.build.json",
     "build": "rm -rf dist && bun build src/index.ts --target bun --format esm --packages external --outfile dist/server.js && bun build src/core.ts --target bun --format esm --packages external --outfile dist/core.js && bun build src/admin/index.ts --target bun --format esm --packages external --outfile dist/admin.js && bunx tsc -p tsconfig.build.json && bun run --cwd packages/opencode-plugin build",
-    "check": "bunx tsc --noEmit && bun run types && bun run --cwd packages/opencode-plugin check",
+    "check": "bun run types && bunx tsc --noEmit && bun run --cwd packages/opencode-plugin check",
     "test": "bun test",
     "test:property": "bun test test/security/redaction-property.test.ts",
     "test:stress": "bun test test/concurrency test/plugin/reconcile-backpressure.test.ts",

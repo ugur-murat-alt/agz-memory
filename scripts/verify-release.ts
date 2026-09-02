@@ -58,6 +58,9 @@ export function collectReleaseFiles(root: string): Map<string, string> {
 }
 
 export function validateReleaseFiles(files: ReadonlyMap<string, string>): string[] {
+  files = new Map(
+    [...files].map(([path, content]) => [path, content.replace(/\r\n?/g, "\n")]),
+  );
   const errors: string[] = [];
   const required = [
     "README.md",

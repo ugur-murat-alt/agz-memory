@@ -12,6 +12,16 @@ describe("release surface", () => {
     expect(validateReleaseFiles(collectReleaseFiles(root))).toEqual([]);
   });
 
+  test("accepts CRLF release files from Windows checkouts", () => {
+    const files = new Map(
+      [...collectReleaseFiles(root)].map(([path, content]) => [
+        path,
+        content.replace(/\n/g, "\r\n"),
+      ]),
+    );
+    expect(validateReleaseFiles(files)).toEqual([]);
+  });
+
   test("rejects package version drift", () => {
     const files = collectReleaseFiles(root);
     const plugin = JSON.parse(files.get("packages/opencode-plugin/package.json")!) as Record<
