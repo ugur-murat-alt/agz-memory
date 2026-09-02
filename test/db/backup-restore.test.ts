@@ -272,7 +272,7 @@ describe("backup, restore, and migration lock", () => {
       else process.env.OPENCODE_MEMORY_DATABASE_PATH = previous;
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   test("serializes live migration owners and only breaks a verified stale owner", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-lock-"));

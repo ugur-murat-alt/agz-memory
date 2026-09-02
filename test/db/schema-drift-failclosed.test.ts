@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { openMemoryDatabase } from "../../src/db";
 import { doctorDatabase } from "../../src/admin/doctor";
+import { assertSchemaV11 } from "../../src/db/health";
 import { schemaFingerprint } from "../../src/db/schema";
 import { MemoryStore } from "../../src/store";
 
@@ -55,5 +56,22 @@ describe("schema fingerprint validation", () => {
       first.close();
       second.close();
     }
+  });
+
+  test("preserves a busy signal from schema identity checks for bounded retry", () => {
+    const busy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    const db = {
+      query(sql: string) {
+        if (sql.includes("sqlite_master")) return { get: () => ({ count: 1 }) };
+        return { get: () => { throw busy; } };
+      },
+    } as unknown as Database;
+    let thrown: unknown;
+    try {
+      assertSchemaV11(db);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBe(busy);
   });
 });

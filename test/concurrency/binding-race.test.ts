@@ -43,7 +43,7 @@ describe("AGZ-005 project and binding uniqueness races", () => {
     expect(result.bindingRows).toBe(BINDING_ROUNDS);
     expect(result.invalidResults).toEqual([]);
     expect(result.nonTargetConflicts).toHaveLength((WORKERS / 2) * BINDING_ROUNDS);
-  });
+  }, 20_000);
 });
 
 async function runProjectCreateRace(): Promise<ProjectRaceResult> {

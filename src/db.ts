@@ -5,7 +5,7 @@ import { hashRoot } from "./identity";
 import { normalizeProjectName } from "./project";
 import { PREDICATES, SCHEMA_VERSION } from "./types";
 import { createVerifiedBackup, restoreVerifiedBackup, type VerifiedBackup } from "./db/backup";
-import { assertHealthyDatabase, assertSchemaV11 } from "./db/health";
+import { assertHealthyDatabase, assertSchemaV11, isSQLiteBusyError } from "./db/health";
 import { assertLegacySchemaIdentity } from "./db/legacy-health";
 import { acquireMigrationLock, type MigrationLock } from "./db/migration-lock";
 import {
@@ -61,6 +61,10 @@ CREATE INDEX IF NOT EXISTS note_edges_source_idx ON note_edges(project_id, sourc
 CREATE INDEX IF NOT EXISTS note_edges_target_idx ON note_edges(project_id, target_id);
 CREATE TABLE IF NOT EXISTS schema_state (version INTEGER PRIMARY KEY);
 `;
+
+// Pre-open validation can overlap a just-created SQLite schema on Windows. Keep
+// retries confined to this read-only probe; the post-lock probe remains authoritative.
+const PRE_OPEN_PROBE_TIMEOUT_MS = 5_000;
 
 export interface OpenedDB {
   db: Database;
@@ -379,6 +383,19 @@ function openDatabase(path: string): Database {
 }
 
 function assertSupportedDatabaseBeforeOpen(path: string): void {
+  const deadline = Date.now() + PRE_OPEN_PROBE_TIMEOUT_MS;
+  while (true) {
+    try {
+      assertSupportedDatabaseBeforeOpenOnce(path);
+      return;
+    } catch (error) {
+      if (!isSQLiteBusyError(error) || Date.now() >= deadline) throw error;
+      Bun.sleepSync(Math.min(50, Math.max(1, deadline - Date.now())));
+    }
+  }
+}
+
+function assertSupportedDatabaseBeforeOpenOnce(path: string): void {
   assertDatabasePath(path);
   if (!existsSync(path)) return;
   const db = new Database(path, { readonly: true });
@@ -432,7 +449,8 @@ function getSchemaVersion(db: Database): { version: number } | undefined {
     rows = db.query("SELECT version FROM schema_state").all() as Array<{
       version: unknown;
     }>;
-  } catch {
+  } catch (error) {
+    if (isSQLiteBusyError(error)) throw error;
     throw new Error("unrecognized_database");
   }
   if (

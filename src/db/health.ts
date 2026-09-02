@@ -101,9 +101,18 @@ export function assertSchemaV11(db: Database): void {
       throw new Error("schema fingerprint mismatch");
     }
   } catch (error) {
+    if (isSQLiteBusyError(error)) throw error;
     if (error instanceof Error && error.message === "schema_fingerprint_mismatch") throw error;
     throw new Error("schema_fingerprint_mismatch");
   }
+}
+
+export function isSQLiteBusyError(error: unknown): boolean {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = String((error as { code: unknown }).code);
+    if (code === "SQLITE_BUSY") return true;
+  }
+  return error instanceof Error && /\bdatabase is (?:busy|locked)\b/i.test(error.message);
 }
 
 export function hasTable(db: Database, table: string): boolean {

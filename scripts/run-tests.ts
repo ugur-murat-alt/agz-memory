@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, symlinkSync } from "fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, symlinkSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join, resolve } from "path";
 
@@ -48,5 +48,7 @@ try {
   if (result.signalCode) process.stderr.write(`bun test stopped by ${result.signalCode}\n`);
   process.exitCode = result.exitCode;
 } finally {
-  if (createdLink) rmSync(packageLink, { recursive: true, force: true });
+  if (createdLink && existsSync(packageLink) && lstatSync(packageLink).isSymbolicLink()) {
+    unlinkSync(packageLink);
+  }
 }
