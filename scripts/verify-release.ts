@@ -138,6 +138,7 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
   requireText(files, "README.tr.md", "| SQLite schema | `11` |", errors);
   validateReviewResolution(files, errors);
   validateCI(files, errors);
+  validateDependabot(files, errors);
 
   compareSections(files, "README.md", "README.tr.md", README_SECTIONS, errors);
   compareSections(
@@ -198,6 +199,40 @@ function validateCI(files: ReadonlyMap<string, string>, errors: string[]): void 
       errors.push(`${path}: action must use a full commit SHA: ${line.trim()}`);
     }
   }
+}
+
+function validateDependabot(files: ReadonlyMap<string, string>, errors: string[]): void {
+  const path = ".github/dependabot.yml";
+  const content = files.get(path) ?? "";
+  const sections = content.split(/(?=^  - package-ecosystem:)/m);
+  for (const directory of ["/", "/packages/opencode-plugin"]) {
+    const section = sections.find(
+      (candidate) =>
+        candidate.startsWith("  - package-ecosystem: npm\n") &&
+        candidate.includes(`    directory: ${directory}\n`),
+    );
+    if (!section || !hasUnqualifiedPluginIgnore(section)) {
+      errors.push(`${path}: ${directory} must ignore all @opencode-ai/plugin updates`);
+    }
+  }
+}
+
+function hasUnqualifiedPluginIgnore(section: string): boolean {
+  const lines = section.split("\n");
+  const ignoreIndex = lines.indexOf("    ignore:");
+  if (ignoreIndex < 0) return false;
+  const ignoreEnd = lines.findIndex(
+    (line, index) => index > ignoreIndex && /^    \S[^:]*:/.test(line),
+  );
+  const ignoreLines = lines.slice(ignoreIndex + 1, ignoreEnd < 0 ? undefined : ignoreEnd);
+  const dependencyIndex = ignoreLines.indexOf(
+    '      - dependency-name: "@opencode-ai/plugin"',
+  );
+  if (dependencyIndex < 0) return false;
+  const nextSetting = ignoreLines
+    .slice(dependencyIndex + 1)
+    .find((line) => line.trim() && !line.trimStart().startsWith("#"));
+  return !nextSetting?.startsWith("        ");
 }
 
 function validateReviewResolution(

@@ -224,6 +224,26 @@ describe("release surface", () => {
     );
   });
 
+  test("rejects a partial Dependabot ignore for the compatibility-locked SDK", () => {
+    const files = collectReleaseFiles(root);
+    files.set(
+      ".github/dependabot.yml",
+      files
+        .get(".github/dependabot.yml")!
+        .replaceAll(
+          '      - dependency-name: "@opencode-ai/plugin"',
+          '      - dependency-name: "@opencode-ai/plugin"\n        versions: ["1.x"]',
+        ),
+    );
+    const errors = validateReleaseFiles(files);
+    expect(errors).toContain(
+      ".github/dependabot.yml: / must ignore all @opencode-ai/plugin updates",
+    );
+    expect(errors).toContain(
+      ".github/dependabot.yml: /packages/opencode-plugin must ignore all @opencode-ai/plugin updates",
+    );
+  });
+
   test("rejects a static package tarball version", () => {
     const files = collectReleaseFiles(root);
     files.set(
