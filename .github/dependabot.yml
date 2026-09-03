@@ -5,6 +5,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # This SDK is compatibility-locked to the exact OpenCode V2 runtime.
+      # Upgrade it manually with the runtime constant and integration tests.
+      - dependency-name: "@opencode-ai/plugin"
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -15,3 +19,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # This SDK is compatibility-locked to the exact OpenCode V2 runtime.
+      # Upgrade it manually with the runtime constant and integration tests.
+      - dependency-name: "@opencode-ai/plugin"
