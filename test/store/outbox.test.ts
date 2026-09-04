@@ -22,12 +22,13 @@ describe("outbox worker", () => {
     const store = new MemoryStore(opened.db, [backend.id]);
     const projectID = store.createProject("Outbox").project!.projectID;
     const noteID = store.update(projectID, {
+      operation: "create",
       kind: "fact",
       title: "outbox",
       summary: "outbox",
     }).id!;
     store.pin(projectID, noteID, true);
-    store.update(projectID, { id: noteID, delete: true });
+    store.update(projectID, { operation: "delete", id: noteID });
     store.deleteProject(projectID, "Outbox");
     const worker = new OutboxWorker(opened.db, new Map([[backend.id, backend]]));
     const outcomes: string[] = [];

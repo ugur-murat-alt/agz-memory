@@ -342,12 +342,14 @@ describe("capture contract v2 hardening", () => {
       const projectA = memory.createProject("Foreign Key A").project!.projectID;
       const projectB = memory.createProject("Foreign Key B").project!.projectID;
       const noteA = memory.update(projectA, {
+        operation: "create",
         kind: "fact",
         title: "A",
         summary: "A",
         content: "A",
       }).id!;
       const noteB = memory.update(projectB, {
+        operation: "create",
         kind: "fact",
         title: "B",
         summary: "B",

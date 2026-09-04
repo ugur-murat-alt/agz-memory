@@ -31,11 +31,14 @@ try {
       result =
         mode === "update"
           ? store.update(projectID, {
+              operation: "patch",
               id: noteID,
-              title: `worker ${worker} round ${round}`,
-              summary: `worker ${worker} round ${round}`,
-              content: `worker ${worker} round ${round}`,
-              kind: "fact",
+              changes: {
+                title: `worker ${worker} round ${round}`,
+                summary: `worker ${worker} round ${round}`,
+                content: `worker ${worker} round ${round}`,
+                kind: "fact",
+              },
             })
           : store.pin(projectID, noteID, desiredPinned);
     } catch (error) {

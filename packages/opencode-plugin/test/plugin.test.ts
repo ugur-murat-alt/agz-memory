@@ -195,7 +195,7 @@ describe("OpenCode V2 memory plugin", () => {
     }
   });
 
-  test("keeps a missed assistant message recoverable after the next prompt", async () => {
+  test("does not fetch an unbounded transcript to recover a missed assistant message", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-watermark-"));
     const databasePath = join(directory, "memory.sqlite");
     const core = openMemoryCore(databasePath);
@@ -258,10 +258,11 @@ describe("OpenCode V2 memory plugin", () => {
         }>
       ).map((row) => row.source_message_id);
       sqlite.close();
-      expect(sourceIDs).toEqual(["assistant-missed", "message-next"]);
+      expect(sourceIDs).toEqual(["message-next"]);
+      expect(harness.contextCallCount()).toBe(0);
       expect(
         core.capture.getCheckpoint("session-1", persisted.bindingKey, projectID)?.lastMessageID,
-      ).toBe("message-next");
+      ).toBeUndefined();
     } finally {
       await runtime.stop();
       core.close();
@@ -347,18 +348,8 @@ describe("OpenCode V2 memory plugin", () => {
     const firstEntered = new Promise<void>((resolve) => { enterFirst = resolve; });
     const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
     const secondEntered = new Promise<void>((resolve) => { enterSecond = resolve; });
-    const harness = fakeContext(
-      directory,
-      {},
-      undefined,
-      async (call) => {
-        if (call === 1) {
-          enterFirst();
-          await firstGate;
-        }
-        if (call === 2) enterSecond();
-      },
-    );
+    const harness = fakeContext(directory, {});
+    let boundaryCalls = 0;
     const runtime = new PluginRuntime(
       harness.context,
       core as unknown as ConstructorParameters<typeof PluginRuntime>[1],
@@ -390,15 +381,24 @@ describe("OpenCode V2 memory plugin", () => {
         reconcileTasks: Set<Promise<void>>;
       };
       const queue = internal.queueReconcile.bind(runtime);
+      internal.reconcile = (async () => {
+        const call = harness.contextCallCount() + boundaryCalls + 1;
+        boundaryCalls++;
+        if (call === 1) {
+          enterFirst();
+          await firstGate;
+        }
+        if (call === 2) enterSecond();
+      }) as typeof internal.reconcile;
       queue("session-1");
       await firstEntered;
       queue("session-1");
       releaseFirst();
       await secondEntered;
-      expect(harness.contextCallCount()).toBe(2);
+      expect(boundaryCalls).toBe(2);
       await Promise.allSettled([...internal.reconcileTasks]);
 
-      let boundaryCalls = 0;
+      boundaryCalls = 0;
       let enterBoundaryRerun!: () => void;
       const boundaryRerun = new Promise<void>((resolve) => { enterBoundaryRerun = resolve; });
       internal.reconcile = (() => {
@@ -424,7 +424,7 @@ describe("OpenCode V2 memory plugin", () => {
     }
   });
 
-  test("releases reconciliation capacity when context calls never settle", async () => {
+  test("releases reconciliation capacity when binding checks never settle", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-reconcile-timeout-"));
     const databasePath = join(directory, "memory.sqlite");
     const core = openMemoryCore(databasePath);
@@ -453,11 +453,9 @@ describe("OpenCode V2 memory plugin", () => {
         }),
       ]);
     };
-    const harness = fakeContext(directory, {}, undefined, (call, requestOptions) => {
-      if (call <= 2) return trackHang(requestOptions);
+    const harness = fakeContext(directory, {}, undefined, undefined, [], (call, requestOptions) => {
+      if (call <= 4) return trackHang(requestOptions);
       enterFifth();
-    }, [], (call, requestOptions) => {
-      if (call <= 2) return trackHang(requestOptions);
     });
     const runtime = new PluginRuntime(
       harness.context,
@@ -497,7 +495,7 @@ describe("OpenCode V2 memory plugin", () => {
       ]);
       await Promise.allSettled([...internal.reconcileTasks]);
       expect(harness.sessionGetCallCount()).toBe(5);
-      expect(harness.contextCallCount()).toBe(3);
+      expect(harness.contextCallCount()).toBe(0);
       expect(peak).toBeLessThanOrEqual(4);
       expect(active).toBe(0);
     } finally {
@@ -568,8 +566,9 @@ describe("OpenCode V2 memory plugin", () => {
         type: "session.idle",
         location: { directory, workspaceID: "" },
         data: { sessionID: "optout-timeout" },
-      })).rejects.toThrow("timeout");
-      expect(aborted).toEqual(["get", "context"]);
+      })).resolves.toBeUndefined();
+      expect(aborted).toEqual(["get"]);
+      expect(harness.contextCallCount()).toBe(0);
     } finally {
       await runtime.stop();
       core.close();
@@ -583,6 +582,7 @@ describe("OpenCode V2 memory plugin", () => {
     const core = openMemoryCore(databasePath);
     const projectID = core.memory.createProject("Plugin Inject").project!.projectID;
     core.memory.update(projectID, {
+      operation: "create",
       kind: "decision",
       title: "Compiler",
       summary: "Use Bun for builds",
@@ -643,6 +643,7 @@ describe("OpenCode V2 memory plugin", () => {
     const core = openMemoryCore(databasePath);
     const projectID = core.memory.createProject("Plugin Opt Out").project!.projectID;
     core.memory.update(projectID, {
+      operation: "create",
       kind: "decision",
       title: "Compiler",
       summary: "Use Bun for builds",
@@ -750,7 +751,16 @@ describe("OpenCode V2 memory plugin", () => {
       await context(resumed);
       expect(resumed.system).toHaveLength(1);
       expect(resumed.system[0]!.text).toContain("Use Bun for builds");
-      await internal.reconcile("session-1");
+      await internal.handleEvent({
+        type: "session.text.ended",
+        location: { directory, workspaceID: "" },
+        data: {
+          sessionID: "session-1",
+          assistantMessageID: "assistant-2",
+          text: "Normal assistant answer",
+          ordinal: 0,
+        },
+      });
       const reconciled = new Database(databasePath, { readonly: true });
       const payloads = JSON.stringify(reconciled.query("SELECT payload_json FROM capture_events").all());
       expect(payloads).not.toContain("Opted-out assistant answer");

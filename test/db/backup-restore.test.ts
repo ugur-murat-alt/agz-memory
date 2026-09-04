@@ -30,7 +30,7 @@ describe("backup, restore, and migration lock", () => {
     const opened = openMemoryDatabase(path);
     const store = new MemoryStore(opened.db);
     const projectID = store.createProject("Restore").project!.projectID;
-    store.update(projectID, { kind: "fact", title: "before", summary: "before" });
+    store.update(projectID, { operation: "create", kind: "fact", title: "before", summary: "before" });
     const backup = createVerifiedBackup(opened.db, path, 11, 11, "test");
     expect(verifyBackupManifest(backup.manifestPath).manifest.sha256).toBe(backup.manifest.sha256);
     expect(() => createVerifiedBackup(opened.db, path, 10, 11, "test")).toThrow(
@@ -44,7 +44,7 @@ describe("backup, restore, and migration lock", () => {
     expect(() => verifyBackupManifest(mismatchedManifest)).toThrow(
       "backup manifest source schema does not match database",
     );
-    store.update(projectID, { kind: "fact", title: "after", summary: "after" });
+    store.update(projectID, { operation: "create", kind: "fact", title: "after", summary: "after" });
     const alternateBackup = createVerifiedBackup(opened.db, path, 11, 11, "test");
     opened.close();
 
@@ -82,7 +82,7 @@ describe("backup, restore, and migration lock", () => {
     const opened = openMemoryDatabase(path);
     const store = new MemoryStore(opened.db);
     const projectID = store.createProject("Busy Restore").project!.projectID;
-    store.update(projectID, { kind: "fact", title: "before", summary: "before" });
+    store.update(projectID, { operation: "create", kind: "fact", title: "before", summary: "before" });
     const backup = createVerifiedBackup(opened.db, path, 11, 11, "test");
     opened.close();
 
@@ -120,6 +120,7 @@ describe("backup, restore, and migration lock", () => {
       const projectID = new MemoryStore(opened.db).createProject("Chunked hash").project!
         .projectID;
       new MemoryStore(opened.db).update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Large backup",
         summary: "Large backup",
@@ -196,7 +197,7 @@ describe("backup, restore, and migration lock", () => {
     const opened = openMemoryDatabase(path);
     const store = new MemoryStore(opened.db);
     const projectID = store.createProject("Corrupt Restore").project!.projectID;
-    store.update(projectID, { kind: "fact", title: "recoverable", summary: "recoverable" });
+    store.update(projectID, { operation: "create", kind: "fact", title: "recoverable", summary: "recoverable" });
     const backup = createVerifiedBackup(opened.db, path, 11, 11, "test");
     opened.close();
     writeFileSync(path, "corrupt-source");
@@ -233,6 +234,7 @@ describe("backup, restore, and migration lock", () => {
     try {
       const dryRun = (await runAdmin(["backup", "prune"])) as { digest: string };
       const alternatePath = join(directory, "alternate.sqlite");
+      cpSync(path, alternatePath);
       cpSync(`${path}.backup`, `${alternatePath}.backup`, { recursive: true });
       process.env.OPENCODE_MEMORY_DATABASE_PATH = alternatePath;
       const alternate = (await runAdmin(["backup", "prune"])) as { digest: string };

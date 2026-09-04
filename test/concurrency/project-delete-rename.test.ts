@@ -23,6 +23,7 @@ describe("AGZ-002 project delete and rename race", () => {
     const store = new MemoryStore(opened.db, ["fake@1"]);
     const projectID = store.createProject("Race Project").project!.projectID;
     const noteID = store.update(projectID, {
+      operation: "create",
       kind: "fact",
       title: "survivor",
       summary: "survivor",
