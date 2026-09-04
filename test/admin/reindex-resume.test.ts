@@ -215,6 +215,9 @@ describe("resumable admin reindex", () => {
       expect(["one", "two"].filter((worker) => existsSync(`${start}.acquired-${worker}`))).toHaveLength(1);
       writeFileSync(`${start}.release`, "go\n");
       const results = await Promise.all(children.map(async (child) => ({ exitCode: await child.exited, stderr: await new Response(child.stderr).text() })));
+      if (results.filter((result) => result.exitCode === 0).length !== 1) {
+        throw new Error(`unexpected stale-lock race results: ${JSON.stringify(results)}`);
+      }
       expect(results.filter((result) => result.exitCode === 0)).toHaveLength(1);
       expect(results.filter((result) => result.exitCode !== 0)).toHaveLength(1);
       expect(results.find((result) => result.exitCode !== 0)?.stderr).toContain("reindex already owned");

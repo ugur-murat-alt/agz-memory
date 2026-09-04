@@ -187,7 +187,7 @@ function acquireOwnerLock(stateFile: string, directory: SidecarDirectory, testOp
       if (status === "live") throw new Error("reindex already owned");
       if (status === "unverifiable") throw new Error("reindex owner lock is unverifiable");
       testOptions.beforeStaleLockTakeover?.();
-      quarantineStaleLock(lock, directory, observed.identity, current, owner.ownerID);
+       quarantineStaleLock(lock, directory, observed.identity, current, owner);
     }
   }
   throw new Error("reindex already owned");
@@ -428,21 +428,57 @@ function quarantineStaleLock(
   directory: SidecarDirectory,
   observedIdentity: FileIdentity,
   observedOwner: ReindexOwnerMetadata,
-  contenderID: string,
+  contender: ReindexOwnerMetadata,
 ): void {
-  const quarantine = `${lock}.${contenderID}.stale`;
-  assertReplacementTargetSafe(quarantine, "reindex stale lock quarantine");
+  const takeover = `${lock}.takeover`;
+  let takeoverFd: number | undefined;
+  let takeoverIdentity: FileIdentity | undefined;
   try {
+    assertSidecarDirectory(directory);
+    takeoverFd = openSync(
+      takeover,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
+    const takeoverStat = fstatSync(takeoverFd);
+    takeoverIdentity = { dev: takeoverStat.dev, ino: takeoverStat.ino };
+    writeSync(takeoverFd, `${JSON.stringify(contender)}\n`);
+    fsyncSync(takeoverFd);
+    closeSync(takeoverFd);
+    takeoverFd = undefined;
+
+    const current = readPrivateJsonFile(lock, directory, "reindex owner lock", true);
+    if (
+      !current ||
+      !sameFile(current.identity, observedIdentity) ||
+      !isOwnerMetadata(current.value) ||
+      current.value.ownerID !== observedOwner.ownerID
+    ) {
+      return;
+    }
+    const quarantine = `${lock}.${contender.ownerID}.stale`;
+  assertReplacementTargetSafe(quarantine, "reindex stale lock quarantine");
     renameSync(lock, quarantine);
+    const claimed = readPrivateJsonFile(quarantine, directory, "reindex stale lock quarantine", false);
+    if (!claimed || !sameFile(claimed.identity, observedIdentity) || !isOwnerMetadata(claimed.value) || claimed.value.ownerID !== observedOwner.ownerID) {
+      throw new Error("reindex owner lock changed during stale takeover");
+    }
+    removeOwnedPrivateFile(quarantine, directory, "reindex stale lock quarantine", observedIdentity, observedOwner.ownerID);
   } catch (error) {
-    if (hasCode(error, "ENOENT")) return;
+    if (hasCode(error, "EEXIST")) throw new Error("reindex already owned");
     throw error;
+  } finally {
+    if (takeoverFd !== undefined) closeSync(takeoverFd);
+    if (takeoverIdentity) {
+      removeOwnedPrivateFile(
+        takeover,
+        directory,
+        "reindex stale takeover lock",
+        takeoverIdentity,
+        contender.ownerID,
+      );
+    }
   }
-  const claimed = readPrivateJsonFile(quarantine, directory, "reindex stale lock quarantine", false);
-  if (!claimed || !sameFile(claimed.identity, observedIdentity) || !isOwnerMetadata(claimed.value) || claimed.value.ownerID !== observedOwner.ownerID) {
-    throw new Error("reindex owner lock changed during stale takeover");
-  }
-  removeOwnedPrivateFile(quarantine, directory, "reindex stale lock quarantine", observedIdentity, observedOwner.ownerID);
 }
 
 function removeOwnedPrivateFile(
