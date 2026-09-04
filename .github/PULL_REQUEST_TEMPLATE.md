@@ -1,4 +1,4 @@
-# Özet
+## Summary
 
 <!-- Değişikliğin sonucunu 2-4 net cümleyle açıklayın. -->
 
@@ -14,7 +14,7 @@
 
 - `<kısa-sha>`: <!-- Commitin tek ve incelenebilir amacını Türkçe yazın. -->
 
-## Doğrulama
+## Verification
 
 - [ ] `bun install --frozen-lockfile`
 - [ ] `bun run release:verify`
@@ -26,7 +26,7 @@
 
 Çalıştırılmayan veya başarısız kontrolleri nedeni ve etkisiyle açıklayın.
 
-## Riskler ve Geri Alma
+## Risk
 
 - Risk: <!-- Bilinen riski veya “Bilinen ek risk yok” ifadesini yazın. -->
 - Geri alma: <!-- Güvenli geri alma ya da ileri düzeltme yolunu yazın. -->
