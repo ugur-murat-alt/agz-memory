@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import type { Plugin } from "@opencode-ai/plugin";
 import type { MemoryCore } from "@vaur94/agz-memory/core";
 import {
@@ -30,6 +30,7 @@ describe("plugin binding locations", () => {
 
       const mainPath = realpathSync(main);
       const linkedPath = realpathSync(linked);
+      assertLinkedWorktreeMetadata(mainPath, linkedPath);
       const mainCaptures: string[] = [];
       const linkedContext = fakeContext(linked, "oc-project", "workspace-1");
       const binding = resolveBinding(linkedContext, fakeCore(mainCaptures), bindingOptions(mainPath))!;
@@ -66,6 +67,103 @@ describe("plugin binding locations", () => {
     }
   });
 });
+
+const MAX_GIT_METADATA_BYTES = 4_096;
+
+function assertLinkedWorktreeMetadata(mainRoot: string, worktreeRoot: string): void {
+  const worktreeGitFile = join(worktreeRoot, ".git");
+  const gitDirectoryReference = fixtureGitMetadata(worktreeGitFile, "gitdir: ");
+  assertFixtureStage(gitDirectoryReference !== undefined, "GITFILE_PARSE");
+
+  const gitDirectory = fixtureRealpath(resolve(worktreeRoot, gitDirectoryReference));
+  assertFixtureStage(gitDirectory !== undefined && fixtureDirectory(gitDirectory), "GITDIR_DIRECTORY");
+
+  const commonDirectoryReference = fixtureGitMetadata(join(gitDirectory, "commondir"));
+  assertFixtureStage(commonDirectoryReference !== undefined, "COMMONDIR_PARSE");
+
+  const sharedGitDirectory = fixtureRealpath(resolve(gitDirectory, commonDirectoryReference));
+  assertFixtureStage(
+    sharedGitDirectory !== undefined && fixtureDirectory(sharedGitDirectory),
+    "COMMONDIR_DIRECTORY",
+  );
+  assertFixtureStage(fixturePathsEqual(basename(sharedGitDirectory), ".git"), "COMMONDIR_BASENAME");
+  assertFixtureStage(fixtureIsWithin(gitDirectory, sharedGitDirectory), "COMMONDIR_CONTAINMENT");
+
+  const mainBacklink = fixtureRealpath(join(dirname(sharedGitDirectory), ".git"));
+  assertFixtureStage(
+    mainBacklink !== undefined && fixturePathsEqual(mainBacklink, sharedGitDirectory),
+    "MAIN_BACKLINK",
+  );
+  const mainGitDirectory = fixtureRealpath(join(mainRoot, ".git"));
+  assertFixtureStage(
+    mainGitDirectory !== undefined && fixturePathsEqual(mainGitDirectory, sharedGitDirectory),
+    "COMMON_DIRECTORY_MATCH",
+  );
+
+  const recordedWorktreeGitFile = fixtureGitMetadata(join(gitDirectory, "gitdir"));
+  assertFixtureStage(recordedWorktreeGitFile !== undefined, "WORKTREE_BACKLINK_PARSE");
+  const resolvedWorktreeGitFile = fixtureRealpath(resolve(gitDirectory, recordedWorktreeGitFile));
+  const expectedWorktreeGitFile = fixtureRealpath(worktreeGitFile);
+  assertFixtureStage(
+    resolvedWorktreeGitFile !== undefined &&
+      expectedWorktreeGitFile !== undefined &&
+      fixturePathsEqual(resolvedWorktreeGitFile, expectedWorktreeGitFile),
+    "WORKTREE_BACKLINK",
+  );
+}
+
+function assertFixtureStage(condition: boolean, stage: string): asserts condition {
+  if (!condition) throw new Error(`AGZ_WORKTREE_FIXTURE_${stage}`);
+}
+
+function fixtureGitMetadata(file: string, prefix = ""): string | undefined {
+  try {
+    const metadata = lstatSync(file);
+    if (!metadata.isFile() || metadata.size === 0 || metadata.size > MAX_GIT_METADATA_BYTES) {
+      return undefined;
+    }
+    const content = readFileSync(file, "utf8");
+    const value = content.endsWith("\r\n")
+      ? content.slice(0, -2)
+      : content.endsWith("\n")
+        ? content.slice(0, -1)
+        : content;
+    if (!value.startsWith(prefix)) return undefined;
+    const path = value.slice(prefix.length);
+    return path && !/[\0\r\n]/.test(path) ? path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function fixtureRealpath(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function fixtureDirectory(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function fixturePathsEqual(left: string, right: string): boolean {
+  return fixturePathComparisonKey(left) === fixturePathComparisonKey(right);
+}
+
+function fixturePathComparisonKey(path: string): string {
+  return process.platform === "win32" ? path.toLocaleLowerCase("en-US") : path;
+}
+
+function fixtureIsWithin(path: string, parent: string): boolean {
+  const remainder = relative(fixturePathComparisonKey(parent), fixturePathComparisonKey(path));
+  return remainder !== "" && remainder !== ".." && !remainder.startsWith(`..${sep}`) && !isAbsolute(remainder);
+}
 
 function bindingOptions(canonicalDirectory: string): MemoryPluginOptions {
   return {
