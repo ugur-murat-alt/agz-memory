@@ -82,9 +82,14 @@ function resolvedPath(path: string): string {
 function sameLocation(left: string, right: string): boolean {
   const leftPath = resolvedPath(left);
   const rightPath = resolvedPath(right);
-  if (leftPath === rightPath) return true;
+  if (pathsEqual(leftPath, rightPath)) return true;
   const leftCommonDirectory = commonGitDirectory(leftPath);
-  return leftCommonDirectory !== undefined && leftCommonDirectory === commonGitDirectory(rightPath);
+  const rightCommonDirectory = commonGitDirectory(rightPath);
+  return (
+    leftCommonDirectory !== undefined &&
+    rightCommonDirectory !== undefined &&
+    pathsEqual(leftCommonDirectory, rightCommonDirectory)
+  );
 }
 
 function commonGitDirectory(worktreeRoot: string): string | undefined {
@@ -104,11 +109,14 @@ function commonGitDirectory(worktreeRoot: string): string | undefined {
     if (!isWithin(gitDirectory, sharedGitDirectory)) return undefined;
 
     const mainRoot = dirname(sharedGitDirectory);
-    if (realpathSync(join(mainRoot, ".git")) !== sharedGitDirectory) return undefined;
+    if (!pathsEqual(realpathSync(join(mainRoot, ".git")), sharedGitDirectory)) return undefined;
 
     const recordedWorktreeGitFile = gitMetadata(join(gitDirectory, "gitdir"));
     if (!recordedWorktreeGitFile) return undefined;
-    if (realpathSync(resolve(gitDirectory, recordedWorktreeGitFile)) !== realpathSync(worktreeGitFile)) {
+    if (!pathsEqual(
+      realpathSync(resolve(gitDirectory, recordedWorktreeGitFile)),
+      realpathSync(worktreeGitFile),
+    )) {
       return undefined;
     }
     return sharedGitDirectory;
@@ -135,6 +143,12 @@ function gitMetadata(file: string, prefix = ""): string | undefined {
 
 function isDirectory(path: string): boolean {
   return lstatSync(path).isDirectory();
+}
+
+function pathsEqual(left: string, right: string): boolean {
+  return process.platform === "win32"
+    ? left.toLocaleLowerCase("en-US") === right.toLocaleLowerCase("en-US")
+    : left === right;
 }
 
 function isWithin(path: string, parent: string): boolean {
