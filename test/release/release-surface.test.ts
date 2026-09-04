@@ -243,10 +243,10 @@ describe("release surface", () => {
       ".github/workflows/ci.yml",
       files
         .get(".github/workflows/ci.yml")!
-        .replace("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", "actions/checkout@v4"),
+        .replace("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "actions/checkout@v7"),
     );
     expect(validateReleaseFiles(files)).toContain(
-      ".github/workflows/ci.yml: action must use a full commit SHA: - uses: actions/checkout@v4 # v4",
+      ".github/workflows/ci.yml: action must use a full commit SHA: - uses: actions/checkout@v7 # v7.0.1",
     );
   });
 
