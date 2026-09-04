@@ -105,7 +105,7 @@ function commonGitDirectory(worktreeRoot: string): string | undefined {
     if (!commonDirectoryReference) return undefined;
 
     const sharedGitDirectory = realpathSync(resolve(gitDirectory, commonDirectoryReference));
-    if (!isDirectory(sharedGitDirectory) || basename(sharedGitDirectory) !== ".git") return undefined;
+    if (!isDirectory(sharedGitDirectory) || !pathsEqual(basename(sharedGitDirectory), ".git")) return undefined;
     if (!isWithin(gitDirectory, sharedGitDirectory)) return undefined;
 
     const mainRoot = dirname(sharedGitDirectory);
@@ -146,12 +146,14 @@ function isDirectory(path: string): boolean {
 }
 
 function pathsEqual(left: string, right: string): boolean {
-  return process.platform === "win32"
-    ? left.toLocaleLowerCase("en-US") === right.toLocaleLowerCase("en-US")
-    : left === right;
+  return pathComparisonKey(left) === pathComparisonKey(right);
+}
+
+function pathComparisonKey(path: string): string {
+  return process.platform === "win32" ? path.toLocaleLowerCase("en-US") : path;
 }
 
 function isWithin(path: string, parent: string): boolean {
-  const remainder = relative(parent, path);
+  const remainder = relative(pathComparisonKey(parent), pathComparisonKey(path));
   return remainder !== "" && remainder !== ".." && !remainder.startsWith(`..${sep}`) && !isAbsolute(remainder);
 }
