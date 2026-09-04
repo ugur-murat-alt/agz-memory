@@ -19,7 +19,20 @@ const source = {
 };
 
 describe("quarantine keyed source digests", () => {
-  test("is deterministic for one source/key, rotates without losing verification, and never hashes payload text", () => {
+  const keyringTest = process.platform === "win32" ? test.skip : test;
+  const windowsTest = process.platform === "win32" ? test : test.skip;
+
+  windowsTest("fails closed when Windows ACL verification is unavailable", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-quarantine-windows-"));
+    try {
+      expect(() => new QuarantineKeyring(join(directory, "keyring.json")).ensureActiveKey())
+        .toThrow("quarantine_keyring_platform_unsupported");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  keyringTest("is deterministic for one source/key, rotates without losing verification, and never hashes payload text", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-quarantine-key-"));
     const keyPath = join(directory, "quarantine.keys");
     try {
@@ -45,7 +58,7 @@ describe("quarantine keyed source digests", () => {
     }
   });
 
-  test("rejects missing, weak, and symlinked keyrings without exposing key material", () => {
+  keyringTest("rejects missing, weak, and symlinked keyrings without exposing key material", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-quarantine-key-"));
     const keyPath = join(directory, "quarantine.keys");
     try {
@@ -65,7 +78,7 @@ describe("quarantine keyed source digests", () => {
     }
   });
 
-  test("handles concurrent create and rotation without a partial or split active key", async () => {
+  keyringTest("handles concurrent create and rotation without a partial or split active key", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-quarantine-key-"));
     const keyPath = join(directory, "quarantine.keys");
     try {

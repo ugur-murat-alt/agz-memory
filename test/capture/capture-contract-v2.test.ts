@@ -19,6 +19,7 @@ const PROJECT_B = "22222222-2222-4222-8222-222222222222";
 const BINDING_KEY = "b".repeat(64);
 
 describe("capture contract v2 hardening", () => {
+  const keyringTest = process.platform === "win32" ? test.skip : test;
   test("uses the schema 11 capture contract", () => {
     expect(CAPTURE_SCHEMA as string).toBe("agz-memory.capture/2");
   });
@@ -250,7 +251,7 @@ describe("capture contract v2 hardening", () => {
     }
   });
 
-  test("AGZ-007 fingerprints quarantined events without retaining their payload", () => {
+  keyringTest("AGZ-007 fingerprints quarantined events without retaining their payload", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-capture-quarantine-id-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     try {

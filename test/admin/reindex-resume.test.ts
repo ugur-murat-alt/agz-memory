@@ -9,9 +9,18 @@ import { openMemoryDatabase } from "../../src/db";
 import { MemoryStore } from "../../src/store";
 
 const workerPath = resolve(import.meta.dir, "reindex-process-worker.ts");
+const posixTest = process.platform === "win32" ? test.skip : test;
+const windowsTest = process.platform === "win32" ? test : test.skip;
 
 describe("resumable admin reindex", () => {
-  test("persists generation and keyset cursor across bounded invocations without duplicate outbox rows", async () => {
+  windowsTest("fails closed without creating reindex state on Windows", async () => {
+    await withDatabase(async ({ path, databaseID }) => {
+      expect(() => runResumableReindex(path, databaseID, "windows", 1, 1)).toThrow();
+      expect(existsSync(`${path}.reindex`)).toBe(false);
+    });
+  });
+
+  posixTest("persists generation and keyset cursor across bounded invocations without duplicate outbox rows", async () => {
     await withDatabase(async ({ path, databaseID, store }) => {
       const projectID = store.createProject("Resumable reindex").project!.projectID;
       for (let index = 0; index < 3; index++) store.update(projectID, { operation: "create", kind: "fact", title: `note-${index}`, summary: "resume" });
@@ -40,7 +49,7 @@ describe("resumable admin reindex", () => {
     expect(() => assertReindexOwnerLivenessSupported("win32")).toThrow("reindex owner liveness is unsupported on win32");
   });
 
-  test("rejects a same-database-ID backup replacement rather than resuming its cursor", async () => {
+  posixTest("rejects a same-database-ID backup replacement rather than resuming its cursor", async () => {
     await withDatabase(async ({ directory, path, databaseID, store }) => {
       store.createProject("Backup replacement");
       expect(runResumableReindex(path, databaseID, "backup-replacement", 1, 1)).toMatchObject({ incomplete: true });
@@ -51,7 +60,7 @@ describe("resumable admin reindex", () => {
     });
   });
 
-  test("does not initialize or migrate an old or empty replacement during identity preflight", async () => {
+  posixTest("does not initialize or migrate an old or empty replacement during identity preflight", async () => {
     await withDatabase(async ({ directory, path, databaseID }) => {
       for (const kind of ["old", "empty"] as const) {
         const replacement = join(directory, `${kind}-replacement.sqlite`);
@@ -87,7 +96,7 @@ describe("resumable admin reindex", () => {
     });
   });
 
-  test("continues past a cursor row deleted between resumptions", async () => {
+  posixTest("continues past a cursor row deleted between resumptions", async () => {
     await withDatabase(async ({ path, databaseID, store }) => {
       const projectID = store.createProject("Deletion tolerance").project!.projectID;
       for (let index = 0; index < 3; index++) store.update(projectID, { operation: "create", kind: "fact", title: `note-${index}`, summary: "resume" });
@@ -104,7 +113,7 @@ describe("resumable admin reindex", () => {
     });
   });
 
-  test("rejects a database replacement before the affected batch mutates or reports", async () => {
+  posixTest("rejects a database replacement before the affected batch mutates or reports", async () => {
     await withDatabase(async ({ directory, path, databaseID, store }) => {
       store.createProject("Database replacement");
       const replacement = join(directory, "replacement.sqlite");
@@ -122,7 +131,7 @@ describe("resumable admin reindex", () => {
     });
   });
 
-  test("reuses its generation after a commit-before-state-write crash without duplicate terminal rows", async () => {
+  posixTest("reuses its generation after a commit-before-state-write crash without duplicate terminal rows", async () => {
     await withDatabase(async ({ path, databaseID, store }) => {
       store.createProject("Crash one");
       store.createProject("Crash two");
@@ -141,7 +150,7 @@ describe("resumable admin reindex", () => {
     });
   });
 
-  test("fails closed when the pinned sidecar directory is replaced before a state write", async () => {
+  posixTest("fails closed when the pinned sidecar directory is replaced before a state write", async () => {
     await withDatabase(async ({ path, databaseID, store }) => {
       store.createProject("Sidecar replacement");
       const sidecar = `${path}.reindex`;
@@ -156,7 +165,7 @@ describe("resumable admin reindex", () => {
     });
   });
 
-  test("fails closed on a sidecar state symlink instead of replacing its target", async () => {
+  posixTest("fails closed on a sidecar state symlink instead of replacing its target", async () => {
     await withDatabase(async ({ directory, path, databaseID, store }) => {
       store.createProject("Sidecar symlink");
       const first = runResumableReindex(path, databaseID, "state-symlink", 1, 1);
@@ -171,7 +180,7 @@ describe("resumable admin reindex", () => {
     });
   });
 
-  test("an exact full final page completes without another incomplete invocation", async () => {
+  posixTest("an exact full final page completes without another incomplete invocation", async () => {
     await withDatabase(async ({ path, databaseID, store }) => {
       const projectID = store.createProject("Exact page").project!.projectID;
       for (let index = 0; index < 2; index++) store.update(projectID, { operation: "create", kind: "fact", title: `note-${index}`, summary: "exact" });
@@ -182,7 +191,7 @@ describe("resumable admin reindex", () => {
     });
   });
 
-  test("actual child processes race for one owner and exactly one fails while the winner completes", async () => {
+  posixTest("actual child processes race for one owner and exactly one fails while the winner completes", async () => {
     await withDatabase(async ({ directory, path, store }) => {
       const projectID = store.createProject("Owner race").project!.projectID;
       for (let index = 0; index < 300; index++) store.update(projectID, { operation: "create", kind: "fact", title: `note-${index}`, summary: "race" });
@@ -197,7 +206,7 @@ describe("resumable admin reindex", () => {
     });
   }, 20_000);
 
-  test("two stale-lock contenders elect one takeover owner without removing its new lock", async () => {
+  posixTest("two stale-lock contenders elect one takeover owner without removing its new lock", async () => {
     await withDatabase(async ({ directory, path, store }) => {
       const projectID = store.createProject("Stale owner race").project!.projectID;
       for (let index = 0; index < 300; index++) store.update(projectID, { operation: "create", kind: "fact", title: `note-${index}`, summary: "race" });

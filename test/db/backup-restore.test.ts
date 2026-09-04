@@ -234,7 +234,8 @@ describe("backup, restore, and migration lock", () => {
     try {
       const dryRun = (await runAdmin(["backup", "prune"])) as { digest: string };
       const alternatePath = join(directory, "alternate.sqlite");
-      cpSync(path, alternatePath);
+      const alternateOpened = openMemoryDatabase(alternatePath);
+      alternateOpened.close();
       cpSync(`${path}.backup`, `${alternatePath}.backup`, { recursive: true });
       process.env.OPENCODE_MEMORY_DATABASE_PATH = alternatePath;
       const alternate = (await runAdmin(["backup", "prune"])) as { digest: string };

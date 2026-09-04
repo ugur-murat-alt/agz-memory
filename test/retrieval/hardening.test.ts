@@ -24,6 +24,7 @@ import { OutboxWorker } from "../../src/store/outbox";
 import { RetrievalStore } from "../../src/store/retrieval";
 
 describe("retrieval hardening regressions", () => {
+  const reindexTest = process.platform === "win32" ? test.skip : test;
   test("AGZ-036 accepts a backend hash derived after redaction", async () => {
     const fixture = openFixture();
     try {
@@ -425,7 +426,7 @@ describe("retrieval hardening regressions", () => {
     }
   });
 
-  test("AGZ-047 queues every active note despite old succeeded rows", async () => {
+  reindexTest("AGZ-047 queues every active note despite old succeeded rows", async () => {
     const fixture = openFixture();
     const backendID = "reindex-backend";
     const previousPath = process.env.OPENCODE_MEMORY_DATABASE_PATH;
@@ -496,7 +497,7 @@ describe("retrieval hardening regressions", () => {
     }
   });
 
-  test("AGZ-047 snapshots after a concurrent canonical writer commits", async () => {
+  reindexTest("AGZ-047 snapshots after a concurrent canonical writer commits", async () => {
     const fixture = openFixture();
     const backendID = "reindex-concurrent-backend";
     try {

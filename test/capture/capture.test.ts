@@ -20,6 +20,7 @@ import { QuarantineKeyring } from "../../src/security/quarantine-key";
 import { quarantinePrivacyReport } from "../../src/admin/quarantine";
 
 describe("capture safety core", () => {
+  const keyringTest = process.platform === "win32" ? test.skip : test;
   test("uses stable native identity hashes and strict bounded events", () => {
     expect(
       captureIdempotencyKey({
@@ -72,7 +73,7 @@ describe("capture safety core", () => {
     expect(redacted.replacements).toBe(1);
   });
 
-  test("stores one event per native identity, quarantines private keys, and materializes explicit memory", () => {
+  keyringTest("stores one event per native identity, quarantines private keys, and materializes explicit memory", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-capture-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     const memory = new MemoryStore(opened.db, ["fake@1"]);
@@ -142,7 +143,7 @@ describe("capture safety core", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  test("fails closed when the quarantine keyring becomes insecure", () => {
+  keyringTest("fails closed when the quarantine keyring becomes insecure", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-capture-keyring-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     try {
