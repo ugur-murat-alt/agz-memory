@@ -94,7 +94,11 @@ const V9_V10_COLUMNS: Record<string, readonly string[]> = {
   ],
 };
 
-export function assertLegacySchemaIdentity(db: Database, version: number): void {
+export function assertLegacySchemaIdentity(
+  db: Database,
+  version: number,
+  options: { verifyHealth?: boolean } = {},
+): void {
   if (version < 2 || version > 10) throw new Error("unrecognized_database");
   const applicationID = (
     db.query("PRAGMA application_id").get() as { application_id: number }
@@ -102,12 +106,12 @@ export function assertLegacySchemaIdentity(db: Database, version: number): void 
   if (applicationID !== 0 || tableExists(db, "agz_meta")) throw new Error("unrecognized_database");
   if (version === 2 && tableExists(db, "memory_items")) {
     assertV2Identity(db);
-    assertHealthyDatabase(db);
+    if (options.verifyHealth) assertHealthyDatabase(db);
     return;
   }
   if (version < 8) {
     assertPreV8Identity(db, version);
-    assertHealthyDatabase(db);
+    if (options.verifyHealth) assertHealthyDatabase(db);
     return;
   }
   const states = db.query("SELECT version FROM schema_state").all() as Array<{ version: unknown }>;
@@ -145,7 +149,7 @@ export function assertLegacySchemaIdentity(db: Database, version: number): void 
       throw new Error("unrecognized_database");
     }
   }
-  assertHealthyDatabase(db);
+  if (options.verifyHealth) assertHealthyDatabase(db);
   if (version === 10) assertV10SourceDatabase(db);
 }
 

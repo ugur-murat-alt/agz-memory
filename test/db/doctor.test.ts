@@ -15,12 +15,13 @@ describe("deep database doctor", () => {
       const store = new MemoryStore(opened.db);
       const projectID = store.createProject("Doctor").project!.projectID;
       const noteID = store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "first",
         summary: "first",
       }).id!;
-      store.update(projectID, { id: noteID, summary: "second" });
-      store.update(projectID, { id: noteID, summary: "third" });
+      store.update(projectID, { operation: "patch", id: noteID, changes: { summary: "second" } });
+      store.update(projectID, { operation: "patch", id: noteID, changes: { summary: "third" } });
       expect(doctorDatabase(opened.db)).toMatchObject({
         ok: true,
         invariants: {

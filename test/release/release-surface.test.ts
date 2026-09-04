@@ -33,6 +33,26 @@ describe("release surface", () => {
     expect(validateReleaseFiles(files)).toContain("core and plugin package versions differ");
   });
 
+  test("rejects a package version other than the 0.5.1 candidate", () => {
+    const files = collectReleaseFiles(root);
+    const rootPackage = JSON.parse(files.get("package.json")!) as Record<string, unknown>;
+    const plugin = JSON.parse(files.get("packages/opencode-plugin/package.json")!) as Record<
+      string,
+      unknown
+    >;
+    rootPackage.version = "0.5.0";
+    plugin.version = "0.5.0";
+    plugin.dependencies = {
+      ...(plugin.dependencies as Record<string, unknown>),
+      "@vaur94/agz-memory": "0.5.0",
+    };
+    files.set("package.json", JSON.stringify(rootPackage));
+    files.set("packages/opencode-plugin/package.json", JSON.stringify(plugin));
+    expect(validateReleaseFiles(files)).toContain(
+      "candidate package version must be 0.5.1, found 0.5.0",
+    );
+  });
+
   test("rejects bilingual section drift", () => {
     const files = collectReleaseFiles(root);
     files.set("README.tr.md", files.get("README.tr.md")!.replace("## Lisans", "## Eksik"));
@@ -56,17 +76,23 @@ describe("release surface", () => {
     catalog.skills[0]!.version = "9.9.9";
     files.set("skills/index.json", JSON.stringify(catalog));
     expect(validateReleaseFiles(files)).toContain(
-      "skills/index.json: skill version must equal 0.5.0",
+      "skills/index.json: skill version must equal 0.5.1",
     );
   });
 
   test("rejects stale active release pins outside the changelog", () => {
     const files = collectReleaseFiles(root);
-    const previousVersion = ["0.4", ".2"].join("");
+    const previousVersion = "0.5.0";
     files.set("synthetic.md", `bunx @vaur94/agz-memory@${previousVersion}`);
     expect(validateReleaseFiles(files)).toContain(
       "synthetic.md: contains previous active package version",
     );
+  });
+
+  test("allows the previous release in the historical changelog", () => {
+    const files = collectReleaseFiles(root);
+    const errors = validateReleaseFiles(files);
+    expect(errors).not.toContain("CHANGELOG.md: contains previous active package version");
   });
 
   test("rejects a missing current security support series", () => {
@@ -93,7 +119,7 @@ describe("release surface", () => {
   test("rejects extra HTTP catalog entries", () => {
     const files = collectReleaseFiles(root);
     const catalog = JSON.parse(files.get("skills/index.json")!) as { skills: unknown[] };
-    catalog.skills.push({ name: "unexpected", version: "0.5.0", files: ["unexpected.md"] });
+    catalog.skills.push({ name: "unexpected", version: "0.5.1", files: ["unexpected.md"] });
     files.set("skills/index.json", JSON.stringify(catalog));
     expect(validateReleaseFiles(files)).toContain(
       "skills/index.json: must contain exactly one skill",
@@ -217,10 +243,81 @@ describe("release surface", () => {
       ".github/workflows/ci.yml",
       files
         .get(".github/workflows/ci.yml")!
-        .replace("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", "actions/checkout@v4"),
+        .replace("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "actions/checkout@v7"),
     );
     expect(validateReleaseFiles(files)).toContain(
-      ".github/workflows/ci.yml: action must use a full commit SHA: - uses: actions/checkout@v4 # v4",
+      ".github/workflows/ci.yml: action must use a full commit SHA: - uses: actions/checkout@v7 # v7.0.1",
+    );
+  });
+
+  test("rejects an unpinned upload-artifact action", () => {
+    const files = collectReleaseFiles(root);
+    files.set(
+      ".github/workflows/ci.yml",
+      files
+        .get(".github/workflows/ci.yml")!
+        .replace("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "actions/upload-artifact@v4"),
+    );
+    expect(validateReleaseFiles(files)).toContain(
+      ".github/workflows/ci.yml: action must use a full commit SHA: uses: actions/upload-artifact@v4 # v4.6.2",
+    );
+  });
+
+  test("rejects CI without ref-scoped cancellation", () => {
+    const files = collectReleaseFiles(root);
+    files.set(
+      ".github/workflows/ci.yml",
+      files.get(".github/workflows/ci.yml")!.replace("cancel-in-progress: true", "cancel-in-progress: false"),
+    );
+    expect(validateReleaseFiles(files)).toContain(".github/workflows/ci.yml: missing \"cancel-in-progress: true\"");
+  });
+
+  test("rejects a migration timing gate with fewer than ten samples", () => {
+    const files = collectReleaseFiles(root);
+    files.set(
+      ".github/workflows/ci.yml",
+      files.get(".github/workflows/ci.yml")!.replace("--iterations 10", "--iterations 1"),
+    );
+    expect(validateReleaseFiles(files)).toContain('.github/workflows/ci.yml: missing "--iterations 10"');
+  });
+
+  test("rejects a migration timing gate without its JSON artifact", () => {
+    const files = collectReleaseFiles(root);
+    files.set(
+      ".github/workflows/ci.yml",
+      files
+        .get(".github/workflows/ci.yml")!
+        .replace('--json "$EVIDENCE_DIR/migration-timing.json"', '--json timing.json'),
+    );
+    expect(validateReleaseFiles(files)).toContain(
+      '.github/workflows/ci.yml: missing "--json \\\"$EVIDENCE_DIR/migration-timing.json\\\""',
+    );
+  });
+
+  test("rejects an evidence upload that can be skipped after a failure", () => {
+    const files = collectReleaseFiles(root);
+    files.set(
+      ".github/workflows/ci.yml",
+      files
+        .get(".github/workflows/ci.yml")!
+        .replace(
+          "      - name: Upload compatibility test evidence\n        if: always()",
+          "      - name: Upload compatibility test evidence",
+        ),
+    );
+    expect(validateReleaseFiles(files)).toContain(
+      ".github/workflows/ci.yml: compatibility evidence upload must run with if: always()",
+    );
+  });
+
+  test("rejects an evidence manifest not bound to the workflow commit", () => {
+    const files = collectReleaseFiles(root);
+    files.set(
+      ".github/workflows/ci.yml",
+      files.get(".github/workflows/ci.yml")!.replace("EVIDENCE_SHA: ${{ github.sha }}", "EVIDENCE_SHA: local"),
+    );
+    expect(validateReleaseFiles(files)).toContain(
+      '.github/workflows/ci.yml: missing "EVIDENCE_SHA: ${{ github.sha }}"',
     );
   });
 
@@ -250,7 +347,7 @@ describe("release surface", () => {
       ".github/workflows/ci.yml",
       files
         .get(".github/workflows/ci.yml")!
-        .replace("vaur94-agz-memory-${VERSION}.tgz", "vaur94-agz-memory-0.5.0.tgz"),
+        .replace("vaur94-agz-memory-${VERSION}.tgz", "vaur94-agz-memory-0.5.1.tgz"),
     );
     expect(validateReleaseFiles(files)).toContain(
       '.github/workflows/ci.yml: missing "CORE_TARBALL=\\"$RUNNER_TEMP/agz-pack/vaur94-agz-memory-${VERSION}.tgz\\""',

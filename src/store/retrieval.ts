@@ -9,6 +9,7 @@ import {
 } from "../retrieval/contract";
 import { weightedReciprocalRankFusion } from "../retrieval/fusion";
 import type { RecallCard } from "../types";
+import { assertTextLimit } from "../contracts/limits";
 
 const MAX_CARDS = 8;
 const MAX_CHANNEL_RESULTS = 40;
@@ -29,6 +30,7 @@ export class RetrievalStore {
   ) {}
 
   async retrieve(request: RetrievalRequest): Promise<RetrievalResult> {
+    assertTextLimit("query", request.query);
     const query = request.query.trim();
     const limit = boundedCardLimit(request.limit);
     if (!query || limit === 0 || Date.now() >= request.deadlineAt) {

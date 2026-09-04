@@ -13,13 +13,13 @@ describe("restore maintenance gate", () => {
     const seeded = openMemoryDatabase(path);
     const store = new MemoryStore(seeded.db);
     const projectID = store.createProject("Live writer").project!.projectID;
-    store.update(projectID, { kind: "fact", title: "before", summary: "before" });
+    store.update(projectID, { operation: "create", kind: "fact", title: "before", summary: "before" });
     const backup = createVerifiedBackup(seeded.db, path, 11, 11, "test");
     seeded.close();
     const opened = openMemoryDatabase(path);
 
     try {
-      new MemoryStore(opened.db).update(projectID, { kind: "fact", title: "after", summary: "after" });
+      new MemoryStore(opened.db).update(projectID, { operation: "create", kind: "fact", title: "after", summary: "after" });
 
       expect(() =>
         restoreVerifiedBackup(

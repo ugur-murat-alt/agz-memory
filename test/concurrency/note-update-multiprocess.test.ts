@@ -65,6 +65,7 @@ async function runNoteRace(mode: "update" | "pin", rounds: number): Promise<Race
   const store = new MemoryStore(opened.db, ["fake@1"]);
   const projectID = store.createProject(`Note ${mode} race`).project!.projectID;
   const noteID = store.update(projectID, {
+    operation: "create",
     kind: "fact",
     title: "initial",
     summary: "initial",

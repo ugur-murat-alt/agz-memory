@@ -44,7 +44,10 @@ export function inspectDatabase(db: Database): DatabaseHealth {
   return { integrity, foreignKeyViolations, schemaVersion, counts };
 }
 
-export function assertHealthyDatabase(db: Database): DatabaseHealth {
+export function assertHealthyDatabase(
+  db: Database,
+  options: { verifySchema?: boolean } = {},
+): DatabaseHealth {
   const health = inspectDatabase(db);
   if (health.integrity !== "ok") {
     throw new Error(`database integrity check failed: ${health.integrity}`);
@@ -52,7 +55,7 @@ export function assertHealthyDatabase(db: Database): DatabaseHealth {
   if (health.foreignKeyViolations.length > 0) {
     throw new Error(`database foreign key check failed: ${health.foreignKeyViolations.length} violation(s)`);
   }
-  if (health.schemaVersion === 11) assertSchemaV11(db);
+  if (options.verifySchema !== false && health.schemaVersion === 11) assertSchemaV11(db);
   return health;
 }
 
