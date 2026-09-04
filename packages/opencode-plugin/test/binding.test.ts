@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import type { Plugin } from "@opencode-ai/plugin";
 import type { MemoryCore } from "@vaur94/agz-memory/core";
@@ -12,7 +13,7 @@ import type { MemoryPluginOptions } from "../src/config";
 
 describe("plugin binding locations", () => {
   test("matches a repository and linked worktree without changing persisted binding paths", async () => {
-    const directory = mkdtempSync("/tmp/agz-memory-plugin-worktree-");
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-worktree-"));
     const main = join(directory, "main");
     const linked = join(directory, "linked");
     const unrelated = join(directory, "unrelated");
