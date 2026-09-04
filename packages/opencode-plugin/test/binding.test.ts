@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import type { Plugin } from "@opencode-ai/plugin";
@@ -96,7 +96,7 @@ function assertLinkedWorktreeMetadata(mainRoot: string, worktreeRoot: string): v
   );
   const mainGitDirectory = fixtureRealpath(join(mainRoot, ".git"));
   assertFixtureStage(
-    mainGitDirectory !== undefined && fixturePathsEqual(mainGitDirectory, sharedGitDirectory),
+    mainGitDirectory !== undefined && fixtureSameDirectory(mainGitDirectory, sharedGitDirectory),
     "COMMON_DIRECTORY_MATCH",
   );
 
@@ -154,6 +154,20 @@ function fixtureDirectory(path: string): boolean {
 
 function fixturePathsEqual(left: string, right: string): boolean {
   return fixturePathComparisonKey(left) === fixturePathComparisonKey(right);
+}
+
+function fixtureSameDirectory(left: string, right: string): boolean {
+  if (fixturePathsEqual(left, right)) return true;
+  if (process.platform !== "win32") return false;
+  const leftStats = statSync(left);
+  const rightStats = statSync(right);
+  return (
+    leftStats.isDirectory() &&
+    rightStats.isDirectory() &&
+    leftStats.ino !== 0 &&
+    leftStats.dev === rightStats.dev &&
+    leftStats.ino === rightStats.ino
+  );
 }
 
 function fixturePathComparisonKey(path: string): string {

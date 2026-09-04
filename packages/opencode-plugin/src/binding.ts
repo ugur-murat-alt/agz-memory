@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, realpathSync } from "fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import type { Plugin } from "@opencode-ai/plugin";
 import type { MemoryCore } from "@vaur94/agz-memory/core";
@@ -82,13 +82,13 @@ function resolvedPath(path: string): string {
 function sameLocation(left: string, right: string): boolean {
   const leftPath = resolvedPath(left);
   const rightPath = resolvedPath(right);
-  if (pathsEqual(leftPath, rightPath)) return true;
+  if (sameDirectory(leftPath, rightPath)) return true;
   const leftCommonDirectory = commonGitDirectory(leftPath);
   const rightCommonDirectory = commonGitDirectory(rightPath);
   return (
     leftCommonDirectory !== undefined &&
     rightCommonDirectory !== undefined &&
-    pathsEqual(leftCommonDirectory, rightCommonDirectory)
+    sameDirectory(leftCommonDirectory, rightCommonDirectory)
   );
 }
 
@@ -109,7 +109,7 @@ function commonGitDirectory(worktreeRoot: string): string | undefined {
     if (!isWithin(gitDirectory, sharedGitDirectory)) return undefined;
 
     const mainRoot = dirname(sharedGitDirectory);
-    if (!pathsEqual(realpathSync(join(mainRoot, ".git")), sharedGitDirectory)) return undefined;
+    if (!sameDirectory(realpathSync(join(mainRoot, ".git")), sharedGitDirectory)) return undefined;
 
     const recordedWorktreeGitFile = gitMetadata(join(gitDirectory, "gitdir"));
     if (!recordedWorktreeGitFile) return undefined;
@@ -147,6 +147,20 @@ function isDirectory(path: string): boolean {
 
 function pathsEqual(left: string, right: string): boolean {
   return pathComparisonKey(left) === pathComparisonKey(right);
+}
+
+function sameDirectory(left: string, right: string): boolean {
+  if (pathsEqual(left, right)) return true;
+  if (process.platform !== "win32") return false;
+  const leftStats = statSync(left);
+  const rightStats = statSync(right);
+  return (
+    leftStats.isDirectory() &&
+    rightStats.isDirectory() &&
+    leftStats.ino !== 0 &&
+    leftStats.dev === rightStats.dev &&
+    leftStats.ino === rightStats.ino
+  );
 }
 
 function pathComparisonKey(path: string): string {
