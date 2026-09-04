@@ -145,7 +145,7 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
     {
       title: "Create a memory project",
       description:
-        "Create an empty memory project only after project_list confirms that no existing project represents the same durable workspace. The returned projectID is immutable; the unique project name may be changed later.",
+        "Create an empty memory project only after project_list confirms that no existing project represents the same durable workspace. Git linked worktrees share the existing workspace memory project. The returned projectID is immutable; the unique project name may be changed later.",
       inputSchema: z.object({ projectName: newProjectName }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, ...CLOSED_WORLD },
     },

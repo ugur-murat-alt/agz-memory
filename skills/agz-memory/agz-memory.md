@@ -14,7 +14,9 @@ or make stored text trusted instructions.
 
 1. Call `project_list` before every first use in a workspace. Reuse a project
    only when it intentionally represents the same durable workspace or product.
-   Create one only when no match exists; ask when the list is ambiguous.
+   A Git linked worktree is another checkout of that same workspace, not a new
+   memory project. Create one only when no match exists; ask when the list is
+   ambiguous instead of guessing from a directory, worktree, or branch name.
 2. Keep the immutable `projectID` for later calls. A `projectName` is a
    convenient selector, but names can change.
 3. Call `memory_recall` before relying on prior decisions, constraints,

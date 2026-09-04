@@ -1,4 +1,5 @@
-import { realpathSync } from "fs";
+import { lstatSync, readFileSync, realpathSync } from "fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import type { Plugin } from "@opencode-ai/plugin";
 import type { MemoryCore } from "@vaur94/agz-memory/core";
 import type { MemoryPluginOptions } from "./config";
@@ -16,7 +17,7 @@ export function resolveBinding(
   core: MemoryCore,
   options: MemoryPluginOptions,
 ): ActiveBinding | undefined {
-  const instanceDirectory = canonical(ctx.location.project.canonical);
+  const instanceDirectory = resolvedPath(ctx.location.project.canonical);
   const workspaceID = String(ctx.location.workspaceID ?? "");
   const matches = options.bindings.filter(
     (binding) =>
@@ -26,8 +27,8 @@ export function resolveBinding(
   if (matches.length === 0) return undefined;
   if (matches.length !== 1) throw new Error("binding_conflict");
   const configured = matches[0]!;
-  const directory = canonical(configured.canonicalDirectory ?? instanceDirectory);
-  if (directory !== instanceDirectory) throw new Error("binding_wrong_location");
+  const directory = resolvedPath(configured.canonicalDirectory ?? instanceDirectory);
+  if (!sameLocation(directory, instanceDirectory)) throw new Error("binding_wrong_location");
   const persisted = core.capture.bindProject({
     memoryProjectID: configured.memoryProjectID,
     opencodeProjectID: configured.opencodeProjectID,
@@ -50,7 +51,7 @@ export function eventMatchesLocation(
   if (!location) return undefined;
   try {
     return (
-      canonical(location.directory) === binding.directory &&
+      sameLocation(location.directory, binding.directory) &&
       String(location.workspaceID ?? "") === binding.workspaceID
     );
   } catch {
@@ -67,11 +68,76 @@ export async function sessionMatchesBinding(
   const session = await ctx.session.get({ sessionID }, { signal });
   return (
     String(session.projectID) === binding.opencodeProjectID &&
-    canonical(String(session.location.directory)) === binding.directory &&
+    sameLocation(String(session.location.directory), binding.directory) &&
     String(session.location.workspaceID ?? "") === binding.workspaceID
   );
 }
 
-function canonical(path: string): string {
+const MAX_GIT_METADATA_BYTES = 4_096;
+
+function resolvedPath(path: string): string {
   return realpathSync(path);
+}
+
+function sameLocation(left: string, right: string): boolean {
+  const leftPath = resolvedPath(left);
+  const rightPath = resolvedPath(right);
+  if (leftPath === rightPath) return true;
+  const leftCommonDirectory = commonGitDirectory(leftPath);
+  return leftCommonDirectory !== undefined && leftCommonDirectory === commonGitDirectory(rightPath);
+}
+
+function commonGitDirectory(worktreeRoot: string): string | undefined {
+  try {
+    const worktreeGitFile = join(worktreeRoot, ".git");
+    if (isDirectory(worktreeGitFile)) return realpathSync(worktreeGitFile);
+    const gitDirectoryReference = gitMetadata(worktreeGitFile, "gitdir: ");
+    if (!gitDirectoryReference) return undefined;
+
+    const gitDirectory = realpathSync(resolve(worktreeRoot, gitDirectoryReference));
+    if (!isDirectory(gitDirectory)) return undefined;
+    const commonDirectoryReference = gitMetadata(join(gitDirectory, "commondir"));
+    if (!commonDirectoryReference) return undefined;
+
+    const sharedGitDirectory = realpathSync(resolve(gitDirectory, commonDirectoryReference));
+    if (!isDirectory(sharedGitDirectory) || basename(sharedGitDirectory) !== ".git") return undefined;
+    if (!isWithin(gitDirectory, sharedGitDirectory)) return undefined;
+
+    const mainRoot = dirname(sharedGitDirectory);
+    if (realpathSync(join(mainRoot, ".git")) !== sharedGitDirectory) return undefined;
+
+    const recordedWorktreeGitFile = gitMetadata(join(gitDirectory, "gitdir"));
+    if (!recordedWorktreeGitFile) return undefined;
+    if (realpathSync(resolve(gitDirectory, recordedWorktreeGitFile)) !== realpathSync(worktreeGitFile)) {
+      return undefined;
+    }
+    return sharedGitDirectory;
+  } catch {
+    return undefined;
+  }
+}
+
+function gitMetadata(file: string, prefix = ""): string | undefined {
+  const metadata = lstatSync(file);
+  if (!metadata.isFile() || metadata.size === 0 || metadata.size > MAX_GIT_METADATA_BYTES) {
+    return undefined;
+  }
+  const content = readFileSync(file, "utf8");
+  const value = content.endsWith("\r\n")
+    ? content.slice(0, -2)
+    : content.endsWith("\n")
+      ? content.slice(0, -1)
+      : content;
+  if (!value.startsWith(prefix)) return undefined;
+  const path = value.slice(prefix.length);
+  return path && !/[\0\r\n]/.test(path) ? path : undefined;
+}
+
+function isDirectory(path: string): boolean {
+  return lstatSync(path).isDirectory();
+}
+
+function isWithin(path: string, parent: string): boolean {
+  const remainder = relative(parent, path);
+  return remainder !== "" && remainder !== ".." && !remainder.startsWith(`..${sep}`) && !isAbsolute(remainder);
 }

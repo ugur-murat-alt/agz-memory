@@ -98,7 +98,10 @@ Capture requires all of these gates:
 
 1. The plugin version and running OpenCode beta match exactly.
 2. Mode is not `off`, capture is enabled, and exactly one explicit binding
-   matches project ID, workspace ID, and canonical directory.
+   matches project ID, workspace ID, and canonical directory. A linked Git
+   worktree may match its main checkout only after reciprocal worktree metadata
+   proves that both use the same common Git directory; persisted binding paths
+   are not rewritten.
 3. Only terminal user/assistant text or terminal tool status is projected.
 4. Credential and private-key patterns are removed or quarantined.
 5. The strict `CaptureEventV2` parser enforces UTF-8 size, kind-specific source identity, event

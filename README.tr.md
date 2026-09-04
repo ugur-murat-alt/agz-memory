@@ -115,7 +115,8 @@ OpenCode araçları yapılandırılan sunucu önekiyle gösterir; örneğin
 Önerilen sıra:
 
 1. `project_list` çağırın ve aynı kalıcı çalışma alanını temsil eden mevcut
-   projeyi yeniden kullanın.
+   projeyi yeniden kullanın. Git bağlantılı çalışma ağaçları bu çalışma alanının
+   ayrı kod kopyalarıdır ve aynı `projectID` değerini kullanmalıdır.
 2. Yalnız eşleşen proje yoksa `project_create` çağırın.
 3. Dönen `projectID` değerini saklayın; ad değişebilir, UUID değişmez.
 4. Geçmiş kararlara dayanmadan önce `memory_recall` çağırın.
@@ -176,9 +177,13 @@ OpenCode proje/çalışma alanı/konumunu mevcut AGZ Memory projesine bağlar:
 ```
 
 `memoryProjectID`, `project_list` sonucundan gelmelidir. Dizin gerçek dosya
-sistemi yoluna çözülür ve etkin OpenCode konumuyla karşılaştırılır. Yalnız bu
-kanonik yolun özeti veritabanına yazılır. Yanlış konum veya çift eşleme,
-sezgisel proje seçmek yerine eklentiyi kapatır.
+sistemi yoluna çözülür ve etkin OpenCode konumuyla karşılaştırılır. Ana kod
+kopyası ile bağlantılı Git çalışma ağacı, yalnız Git metadata'sı ortak dizini
+doğruladığında aynı depo kabul edilir. Her farklı OpenCode proje/çalışma alanı
+kimliğini açıkça eşleyin, fakat aynı `memoryProjectID` değerini yeniden kullanın;
+yapılandırılmış kanonik yol ve veritabanındaki özeti değişmez. İlişkisiz veya
+doğrulanamayan konum ya da çift eşleme, sezgisel proje seçmek yerine eklentiyi
+kapatır.
 
 ## Güvenli Devreye Alma
 

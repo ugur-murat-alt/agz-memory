@@ -114,7 +114,8 @@ OpenCode exposes the tools with the configured server prefix, for example
 Recommended sequence:
 
 1. Call `project_list` and reuse an existing project when it represents the
-   same durable workspace.
+   same durable workspace. Git linked worktrees are separate checkouts of that
+   workspace and must reuse its `projectID`.
 2. Call `project_create` only when no matching project exists.
 3. Keep the returned `projectID`; names can change, UUIDs cannot.
 4. Call `memory_recall` before relying on historical decisions.
@@ -174,9 +175,13 @@ an OpenCode project/workspace/location to an existing AGZ Memory project:
 ```
 
 `memoryProjectID` must come from `project_list`. The directory is resolved with
-the filesystem and compared with the active OpenCode location. Only a hash of
-that canonical path is persisted. A mismatched location or duplicate mapping
-disables the plugin rather than selecting a project heuristically.
+the filesystem and compared with the active OpenCode location. A main checkout
+and a linked Git worktree are accepted as the same repository only when their
+Git metadata confirms the shared common directory. Configure each distinct
+OpenCode project/workspace identity explicitly, but reuse the same
+`memoryProjectID`; the configured canonical path and its persisted hash remain
+unchanged. An unrelated or unverifiable location and a duplicate mapping disable
+the plugin rather than selecting a project heuristically.
 
 ## Roll Out Safely
 
