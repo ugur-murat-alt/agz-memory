@@ -1,10 +1,16 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { MAX_PROJECT_NAME_LENGTH } from "./project";
-import type { MemoryStore, ProjectSelector, UpdateInput } from "./store";
+import type { MemoryStore, ProjectSelector } from "./store";
 import { KINDS, PREDICATES } from "./types";
+import { LIMITS, assertRequestLimit, boundedText } from "./contracts/limits";
+import { asBusinessError, businessError, toPublicError } from "./contracts/error";
+import { normalizeLegacyMutation } from "./contracts/mutation";
 
-const MAX_BATCH = 10;
+const MAX_BATCH = LIMITS.batch;
+const pageLimit = z.number().int().min(1).max(LIMITS.pageSize).optional();
+const cursor = z.string().max(2_048).optional();
+const snapshot = z.string().max(1_024).optional();
 const CLOSED_WORLD = { openWorldHint: false } as const;
 const projectID = z.uuid().describe("The immutable project UUID returned by project_create or project_list.");
 const projectNameValue = z
@@ -20,14 +26,12 @@ const newProjectName = projectNameValue.describe(
 const replacementProjectName = projectNameValue.describe(
   "New unique name for the selected project. The projectID remains unchanged.",
 );
-const noteID = z.string().describe("A note ID returned by memory_update, memory_recall, or memory_read.");
+const noteID = boundedText("noteID", "A note ID returned by memory_update, memory_recall, or memory_read.");
 const kind = z.enum(KINDS).describe("The durable information category for this note.");
-const title = z.string().describe("Short, specific title for identifying the durable record.");
-const summary = z.string().describe("Concise retrieval summary of the durable record.");
-const content = z
-  .string()
-  .describe("Full durable content. For a new note, the summary is used when content is omitted.");
-const query = z.string().describe("Search terms for durable records in the selected project.");
+const title = boundedText("title", "Short, specific title for identifying the durable record.");
+const summary = boundedText("summary", "Concise retrieval summary of the durable record.");
+const content = boundedText("content", "Full durable content. For a new note, the summary is used when content is omitted.");
+const query = boundedText("query", "Search terms for durable records in the selected project.");
 
 const createUpdateSchema = z
   .object({
@@ -50,7 +54,12 @@ const patchUpdateSchema = z
       .describe("Set true to permanently delete this note; false or omitted performs a patch.")
       .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const hasEdits = value.kind !== undefined || value.title !== undefined || value.summary !== undefined || value.content !== undefined;
+    if (value.delete && hasEdits) context.addIssue({ code: "custom", message: "cannot combine delete with edits" });
+    if (!value.delete && !hasEdits) context.addIssue({ code: "custom", message: "patch requires changes" });
+  });
 
 const updateSchema = z.union([createUpdateSchema, patchUpdateSchema]);
 const linkSchema = z
@@ -66,7 +75,46 @@ const linkSchema = z
   .strict();
 
 function textResult(value: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+  const text = JSON.stringify(value, null, 2);
+  if (Buffer.byteLength(text, "utf8") > LIMITS.responseBytes) return errorResult(businessError("limit_exceeded", "response exceeds configured limit"));
+  return { content: [{ type: "text" as const, text }] };
+}
+
+function errorResult(error: unknown, operation = "tool") {
+  const publicError = toPublicError(asBusinessError(error));
+  logPublicError(operation, publicError);
+  return { content: [{ type: "text" as const, text: JSON.stringify({ error: publicError }, null, 2) }], isError: true };
+}
+
+function logPublicError(operation: string, publicError: ReturnType<typeof toPublicError>) {
+  console.error(JSON.stringify({ component: "mcp", operation, outcome: "error", error_code: publicError.code, correlation_id: publicError.correlationID }));
+}
+
+function batchFailure(error: unknown, operation: string) {
+  const publicError = toPublicError(asBusinessError(error));
+  logPublicError(operation, publicError);
+  return { ok: false as const, error: publicError };
+}
+
+async function guardTool<T>(operation: string, work: () => T | Promise<T>) {
+  try {
+    return await work();
+  } catch (error) {
+    return errorResult(error, operation);
+  }
+}
+
+function updateFailure(result: { reason?: string }) {
+  const reason = result.reason ?? "memory update failed";
+  if (reason.includes("not found")) return businessError("not_found", "memory record not found");
+  if (reason.includes("conflict") || reason.includes("already exists")) return businessError("conflict", "memory operation conflicted");
+  return businessError("invalid_request", "memory operation was rejected");
+}
+
+function singleResult(result: { ok?: boolean; reason?: string }, operation: string) {
+  if (result.ok !== false) return textResult({ results: [result] });
+  const error = updateFailure(result);
+  return errorResult(error, operation);
 }
 
 function resolveProject(store: MemoryStore, selector: ProjectSelector) {
@@ -83,10 +131,13 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
       title: "List memory projects",
       description:
         "List all memory projects with their immutable IDs, current names, note counts, and pinned-note counts. Use this before selecting or creating a project; reuse one only when it represents the same durable workspace.",
-      inputSchema: z.object({}).strict(),
+       inputSchema: z.object({ limit: pageLimit, cursor, snapshot }).strict(),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, ...CLOSED_WORLD },
     },
-    async () => textResult({ projects: store.listProjects() }),
+    async (raw) => guardTool("project_list", async () => {
+        const page = store.listProjectsPage(raw.limit ?? LIMITS.pageSize, raw.cursor, raw.snapshot);
+        return textResult({ projects: page.items, snapshot: page.snapshot, etag: page.etag, nextCursor: page.nextCursor });
+    }),
   );
 
   server.registerTool(
@@ -98,7 +149,7 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
       inputSchema: z.object({ projectName: newProjectName }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, ...CLOSED_WORLD },
     },
-    async ({ projectName }) => textResult({ results: [store.createProject(projectName)] }),
+    async ({ projectName }) => guardTool("project_create", () => singleResult(store.createProject(projectName), "project_create")),
   );
 
   server.registerTool(
@@ -110,8 +161,7 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
       inputSchema: z.object({ projectID, projectName: replacementProjectName }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, ...CLOSED_WORLD },
     },
-    async ({ projectID, projectName }) =>
-      textResult({ results: [store.updateProject(projectID, projectName)] }),
+    async ({ projectID, projectName }) => guardTool("project_update", () => singleResult(store.updateProject(projectID, projectName), "project_update")),
   );
 
   server.registerTool(
@@ -133,8 +183,7 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
         .strict(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, ...CLOSED_WORLD },
     },
-    async ({ projectID, confirmProjectName }) =>
-      textResult({ results: [store.deleteProject(projectID, confirmProjectName)] }),
+    async ({ projectID, confirmProjectName }) => guardTool("project_delete", () => singleResult(store.deleteProject(projectID, confirmProjectName), "project_delete")),
   );
 
   server.registerTool(
@@ -144,14 +193,14 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
       description:
         "Search memory only inside one project selected by immutable projectID or unique projectName. Pass one query or up to 10 queries. Indexed cards require memory_read for full content.",
       inputSchema: z.union([
-        z.object({ projectID, query }).strict(),
+        z.object({ projectID, query, limit: pageLimit, cursor, snapshot }).strict(),
         z
           .object({
             projectID,
             queries: z.array(query).min(1).max(MAX_BATCH).describe("One to 10 independent searches."),
           })
           .strict(),
-        z.object({ projectName, query }).strict(),
+        z.object({ projectName, query, limit: pageLimit, cursor, snapshot }).strict(),
         z
           .object({
             projectName,
@@ -161,18 +210,27 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
       ]),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, ...CLOSED_WORLD },
     },
-    async (raw) => {
+    async (raw) => guardTool("memory_recall", async () => {
+      assertRequestLimit(raw);
       const resolved = resolveProject(store, raw);
-      if ("error" in resolved) return textResult({ results: [resolved.error] });
-      const queries = "query" in raw ? [raw.query] : raw.queries;
-      return textResult({
-        project: resolved.project,
-        results: queries.map((query) => ({
-          query,
-          cards: store.recall(resolved.project.projectID, query),
-        })),
+      if ("error" in resolved) return errorResult(businessError("not_found", "project not found"), "memory_recall");
+       const queries = "query" in raw ? [raw.query] : raw.queries;
+       return textResult({
+         project: resolved.project,
+         results: queries.map((query) => ({
+           query,
+           ...(() => {
+              return store.recallPage(
+                resolved.project.projectID,
+                query,
+                (raw as { limit?: number }).limit ?? LIMITS.pageSize,
+                (raw as { cursor?: string }).cursor,
+                (raw as { snapshot?: string }).snapshot,
+              );
+           })(),
+         })),
       });
-    },
+    }),
   );
 
   server.registerTool(
@@ -209,15 +267,35 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
       ]),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, ...CLOSED_WORLD },
     },
-    async (raw) => {
+    async (raw) => guardTool("memory_update", async () => {
+      assertRequestLimit(raw);
       const resolved = resolveProject(store, raw);
-      if ("error" in resolved) return textResult({ results: [resolved.error] });
-      const updates: UpdateInput[] = "updates" in raw ? raw.updates : [raw];
+      if ("error" in resolved) return errorResult(businessError("not_found", "project not found"), "memory_update");
+      const updates = "updates" in raw ? raw.updates : [raw];
+      if (updates.length === 1 && !("updates" in raw)) {
+        try {
+          const result = store.update(resolved.project.projectID, normalizeLegacyMutation(updates[0]!));
+          return result.ok
+            ? textResult({ project: resolved.project, results: [result] })
+            : errorResult(updateFailure(result), "memory_update");
+        } catch (error) {
+          return errorResult(error, "memory_update");
+        }
+      }
+      const results = updates.map((update) => {
+        try {
+          const result = store.update(resolved.project.projectID, normalizeLegacyMutation(update));
+          return result.ok ? result : batchFailure(updateFailure(result), "memory_update");
+        } catch (error) {
+          return batchFailure(error, "memory_update");
+        }
+      });
       return textResult({
         project: resolved.project,
-        results: updates.map((update) => store.update(resolved.project.projectID, update)),
+        ...(results.some((result) => !result.ok) ? { status: "partial_failure" } : {}),
+        results,
       });
-    },
+    }),
   );
 
   server.registerTool(
@@ -244,14 +322,14 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
       ]),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, ...CLOSED_WORLD },
     },
-    async (raw) => {
+    async (raw) => guardTool("memory_pin", async () => {
       const resolved = resolveProject(store, raw);
-      if ("error" in resolved) return textResult({ results: [resolved.error] });
-      return textResult({
-        project: resolved.project,
-        results: [store.pin(resolved.project.projectID, raw.id, raw.pinned)],
-      });
-    },
+      if ("error" in resolved) return errorResult(businessError("not_found", "project not found"), "memory_pin");
+      const result = store.pin(resolved.project.projectID, raw.id, raw.pinned);
+      return result.ok === false
+        ? errorResult(updateFailure(result), "memory_pin")
+        : textResult({ project: resolved.project, results: [result] });
+    }),
   );
 
   server.registerTool(
@@ -285,17 +363,27 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
       ]),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, ...CLOSED_WORLD },
     },
-    async (raw) => {
+    async (raw) => guardTool("memory_link", async () => {
       const resolved = resolveProject(store, raw);
-      if ("error" in resolved) return textResult({ results: [resolved.error] });
-      const links = "links" in raw ? raw.links : [raw];
-      return textResult({
-        project: resolved.project,
-        results: links.map((link) =>
-          store.link(resolved.project.projectID, link.sourceID, link.targetID, link.predicate),
-        ),
+      if ("error" in resolved) return errorResult(businessError("not_found", "project not found"), "memory_link");
+      if (!("links" in raw)) {
+        try {
+          const result = store.link(resolved.project.projectID, raw.sourceID, raw.targetID, raw.predicate);
+          return result.ok ? textResult({ project: resolved.project, results: [result] }) : errorResult(updateFailure(result), "memory_link");
+        } catch (error) {
+          return errorResult(error, "memory_link");
+        }
+      }
+      const results = raw.links.map((link) => {
+        try {
+          const result = store.link(resolved.project.projectID, link.sourceID, link.targetID, link.predicate);
+          return result.ok ? result : batchFailure(updateFailure(result), "memory_link");
+        } catch (error) {
+          return batchFailure(error, "memory_link");
+        }
       });
-    },
+      return textResult({ project: resolved.project, ...(results.some((result) => !result.ok) ? { status: "partial_failure" } : {}), results });
+    }),
   );
 
   server.registerTool(
@@ -305,14 +393,14 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
       description:
         "Read one note or up to 10 notes from one selected project, including full content, pin state, project identity, and same-project graph edges.",
       inputSchema: z.union([
-        z.object({ projectID, id: noteID }).strict(),
+         z.object({ projectID, id: noteID, limit: pageLimit, cursor, snapshot }).strict(),
         z
           .object({
             projectID,
             ids: z.array(noteID).min(1).max(MAX_BATCH).describe("One to 10 note IDs to read."),
           })
           .strict(),
-        z.object({ projectName, id: noteID }).strict(),
+         z.object({ projectName, id: noteID, limit: pageLimit, cursor, snapshot }).strict(),
         z
           .object({
             projectName,
@@ -322,17 +410,24 @@ export function registerTools(server: McpServer, store: MemoryStore): void {
       ]),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, ...CLOSED_WORLD },
     },
-    async (raw) => {
+    async (raw) => guardTool("memory_read", async () => {
       const resolved = resolveProject(store, raw);
-      if ("error" in resolved) return textResult({ results: [resolved.error] });
+      if ("error" in resolved) return errorResult(businessError("not_found", "project not found"), "memory_read");
       const ids = "id" in raw ? [raw.id] : raw.ids;
+      const results = ids.map((id) => ({
+        id,
+        result: "id" in raw && (raw.limit !== undefined || raw.cursor !== undefined || raw.snapshot !== undefined)
+          ? store.readPage(resolved.project.projectID, id, raw.limit ?? LIMITS.pageSize, raw.cursor, raw.snapshot)
+          : store.read(resolved.project.projectID, id),
+      }));
+      const firstResult = results[0]?.result;
+      if (!("ids" in raw) && (!firstResult || !("note" in firstResult) || !firstResult.note)) {
+        return errorResult(businessError("not_found", "memory record not found"), "memory_read");
+      }
       return textResult({
         project: resolved.project,
-        results: ids.map((id) => ({
-          id,
-          result: store.read(resolved.project.projectID, id),
-        })),
+        results,
       });
-    },
+    }),
   );
 }

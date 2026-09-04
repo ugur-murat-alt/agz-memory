@@ -4,6 +4,9 @@ declare module "@vaur94/agz-memory/core" {
   export const CAPTURE_SCHEMA: CoreModule["CAPTURE_SCHEMA"];
   export const REDACTION_POLICY_VERSION: CoreModule["REDACTION_POLICY_VERSION"];
   export const SUPPORTED_OPENCODE_VERSION: CoreModule["SUPPORTED_OPENCODE_VERSION"];
+  export const KINDS: CoreModule["KINDS"];
+  export const LIMITS: CoreModule["LIMITS"];
+  export const utf8Bytes: CoreModule["utf8Bytes"];
   export const captureIdempotencyKey: CoreModule["captureIdempotencyKey"];
   export const extractExplicitUserCandidate: CoreModule["extractExplicitUserCandidate"];
   export const formatUntrustedContext: CoreModule["formatUntrustedContext"];
