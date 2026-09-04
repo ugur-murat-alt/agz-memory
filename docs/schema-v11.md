@@ -1,6 +1,6 @@
 # SQLite Schema 11
 
-Schema 11 is the canonical storage contract for AGZ Memory 0.5.1. SQLite remains the source of truth. Search backends are derived, redacted, disposable indexes rebuilt through the durable outbox.
+Schema 11 is the canonical storage contract for AGZ Memory 0.5.2. SQLite remains the source of truth. Search backends are derived, redacted, disposable indexes rebuilt through the durable outbox.
 
 ## Database Identity
 

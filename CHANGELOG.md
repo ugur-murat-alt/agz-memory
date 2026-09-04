@@ -3,9 +3,24 @@
 All notable changes to AGZ Memory are recorded here. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [0.5.1] - 2026-09-04
+## [0.5.2] - 2026-09-04
 
-> Candidate metadata only; no npm publication, Git tag, or merge is claimed.
+### Changed
+
+- Updated linked Git worktree guidance so a main checkout and its linked
+  worktrees safely reuse the same `memoryProjectID` after Git metadata confirms
+  the shared common directory.
+- Preserved persisted binding path and key compatibility while allowing distinct
+  OpenCode project/workspace identities to map to that shared memory project.
+- Aligned release metadata, package examples, and bilingual operational guidance
+  with the 0.5.2 release surface.
+
+### Compatibility
+
+- Retained SQLite schema 11, the exact nine-tool MCP contract, and inert plugin
+  defaults across the worktree identity guidance change.
+
+## [0.5.1] - 2026-09-04
 
 ### Changed
 

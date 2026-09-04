@@ -5,7 +5,7 @@ const CORE_PACKAGE = "@vaur94/agz-memory";
 const PLUGIN_PACKAGE = "@vaur94/agz-memory-plugin";
 const RETIRED_NAME = ["opencode", "2", "-memory"].join("");
 const RETIRED_VERSION = ["0.4.0", "beta.1"].join("-");
-const PREVIOUS_VERSION = "0.5.0";
+const PREVIOUS_VERSION = "0.5.1";
 const SINGLE_FILE_REVIEW_EVIDENCE = new Set(["061", "062", "063", "065"]);
 const SKILL_FRONTMATTER = `---
 name: AGZ Memory
@@ -108,7 +108,7 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
   if (version && dependency !== version) {
     errors.push(`plugin dependency on ${CORE_PACKAGE} must equal ${version}`);
   }
-  if (version && version !== "0.5.1") errors.push(`candidate package version must be 0.5.1, found ${version}`);
+  if (version && version !== "0.5.2") errors.push(`candidate package version must be 0.5.2, found ${version}`);
 
   if (version) {
     requireText(files, "src/version.ts", `PRODUCT_VERSION = "${version}"`, errors);

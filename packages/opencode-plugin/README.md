@@ -2,12 +2,12 @@
 
 English | [Türkçe](README.tr.md)
 
-Optional OpenCode V2 adapter for `@vaur94/agz-memory@0.5.1`. It adds explicit
+Optional OpenCode V2 adapter for `@vaur94/agz-memory@0.5.2`. It adds explicit
 project binding, redacted capture, bounded retrieval, and staged context
 injection to OpenCode `0.0.0-beta-18743`.
 
-**0.5.1 status:** This repository documents a candidate only. It does not claim
-npm publication, a Git tag, or a merge.
+**0.5.2 status:** This repository documents the 0.5.2 release surface and
+compatibility contract; npm publication and Git hosting state are tracked separately.
 
 The package is safe when merely installed. Defaults are `mode: "off"`, no
 bindings, capture disabled, automatic project creation forbidden, semantic
@@ -18,7 +18,7 @@ retrieval deadline.
 {
   "plugins": [
     {
-      "package": "@vaur94/agz-memory-plugin@0.5.1",
+      "package": "@vaur94/agz-memory-plugin@0.5.2",
       "options": {
         "mode": "off",
         "autoCreateProjects": false,

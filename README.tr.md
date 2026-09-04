@@ -10,8 +10,8 @@ Aynı sürümde ilerleyen, birbirinden bağımsız kullanılabilen iki paket sun
 - `@vaur94/agz-memory-plugin`: sınırlı geri çağırma ve bilinçli olarak aşamalı
   otomatik yakalama için isteğe bağlı OpenCode V2 bağdaştırıcısı.
 
-**0.5.1 durumu:** Bu depo yalnızca aday sürüm metadata'sını belgeler; npm
-yayımlama, Git etiketi veya birleştirme iddiası içermez.
+**0.5.2 durumu:** Bu depo 0.5.2 sürüm yüzeyini ve uyumluluk sözleşmesini
+belgeler; npm yayımlama ve Git barındırma durumu ayrı olarak izlenir.
 
 MCP sunucusu normal kullanım için hazırdır. Eklenti hareketsiz başlar: açık bir
 eşleme ve devreye alma modu verilene kadar proje oluşturmaz, oturum yakalamaz ve
@@ -35,8 +35,8 @@ bağlam eklemez.
 
 | Bileşen | Desteklenen sürüm |
 |---|---|
-| Çekirdek ve MCP | `0.5.1` |
-| OpenCode eklentisi | `0.5.1` |
+| Çekirdek ve MCP | `0.5.2` |
+| OpenCode eklentisi | `0.5.2` |
 | OpenCode V2 | `0.0.0-beta-18743` |
 | `@opencode-ai/plugin` | `0.0.0-beta-18743` |
 | Bun | `>=1.3.14` |
@@ -50,7 +50,7 @@ MCP sunucusu bir OpenCode beta sürümüne bağlı değildir. İsteğe bağlı e
 Sunucuyu doğrudan çalıştırın:
 
 ```sh
-bunx @vaur94/agz-memory@0.5.1
+bunx @vaur94/agz-memory@0.5.2
 ```
 
 Ya da OpenCode V2 içinde `mcp.servers` altına kaydedin:
@@ -58,13 +58,13 @@ Ya da OpenCode V2 içinde `mcp.servers` altına kaydedin:
 ```jsonc
 {
   "skills": [
-    "https://raw.githubusercontent.com/ugur-murat-alt/agz-memory/v0.5.1/skills/"
+    "https://raw.githubusercontent.com/ugur-murat-alt/agz-memory/v0.5.2/skills/"
   ],
   "mcp": {
     "servers": {
       "agz-memory": {
         "type": "local",
-        "command": ["bunx", "@vaur94/agz-memory@0.5.1"],
+        "command": ["bunx", "@vaur94/agz-memory@0.5.2"],
         "environment": {
           "OPENCODE_MEMORY_DATABASE_PATH": "{env:OPENCODE_MEMORY_DATABASE_PATH}"
         },
@@ -136,7 +136,7 @@ ayarlarla ekleyin:
 {
   "plugins": [
     {
-      "package": "@vaur94/agz-memory-plugin@0.5.1",
+      "package": "@vaur94/agz-memory-plugin@0.5.2",
       "options": {
         "mode": "off",
         "autoCreateProjects": false,
@@ -213,11 +213,11 @@ kapılarından geçene kadar `semanticBackend` değeri `none` olmalıdır.
 Yönetim aracı aynı `OPENCODE_MEMORY_DATABASE_PATH` değerini okur:
 
 ```sh
-bunx --package @vaur94/agz-memory@0.5.1 agz-memory-admin doctor
-bunx --package @vaur94/agz-memory@0.5.1 agz-memory-admin backup
-bunx --package @vaur94/agz-memory@0.5.1 agz-memory-admin upgrade --to 11
-bunx --package @vaur94/agz-memory@0.5.1 agz-memory-admin capture status
-bunx --package @vaur94/agz-memory@0.5.1 agz-memory-admin outbox status
+bunx --package @vaur94/agz-memory@0.5.2 agz-memory-admin doctor
+bunx --package @vaur94/agz-memory@0.5.2 agz-memory-admin backup
+bunx --package @vaur94/agz-memory@0.5.2 agz-memory-admin upgrade --to 11
+bunx --package @vaur94/agz-memory@0.5.2 agz-memory-admin capture status
+bunx --package @vaur94/agz-memory@0.5.2 agz-memory-admin outbox status
 ```
 
 Yükseltmeler özel bir geçiş kilidi alır ve veritabanını değiştirmeden önce
@@ -226,7 +226,7 @@ dener. Geri yükleme ve yedek silme işlemleri önce deneme çıktısı, sonra a
 onay değerleri ister; bu değerleri tahmin etmeyin.
 
 Tam prova için [yedekleme ve geri yükleme runbook'unu](docs/backup-restore-runbook.tr.md)
-kullanın. Final `0.5.1` yedek manifestleri `agz-memory-backup/1` kullanır;
+kullanın. `0.5.2` yedek manifestleri `agz-memory-backup/1` kullanır;
 ön sürüm manifestleri onları oluşturan ön sürümle işlenmelidir.
 
 ## Güvenlik Modeli

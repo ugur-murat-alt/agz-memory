@@ -33,7 +33,7 @@ describe("release surface", () => {
     expect(validateReleaseFiles(files)).toContain("core and plugin package versions differ");
   });
 
-  test("rejects a package version other than the 0.5.1 candidate", () => {
+  test("rejects a package version other than 0.5.2", () => {
     const files = collectReleaseFiles(root);
     const rootPackage = JSON.parse(files.get("package.json")!) as Record<string, unknown>;
     const plugin = JSON.parse(files.get("packages/opencode-plugin/package.json")!) as Record<
@@ -49,7 +49,7 @@ describe("release surface", () => {
     files.set("package.json", JSON.stringify(rootPackage));
     files.set("packages/opencode-plugin/package.json", JSON.stringify(plugin));
     expect(validateReleaseFiles(files)).toContain(
-      "candidate package version must be 0.5.1, found 0.5.0",
+      "candidate package version must be 0.5.2, found 0.5.0",
     );
   });
 
@@ -76,13 +76,13 @@ describe("release surface", () => {
     catalog.skills[0]!.version = "9.9.9";
     files.set("skills/index.json", JSON.stringify(catalog));
     expect(validateReleaseFiles(files)).toContain(
-      "skills/index.json: skill version must equal 0.5.1",
+      "skills/index.json: skill version must equal 0.5.2",
     );
   });
 
   test("rejects stale active release pins outside the changelog", () => {
     const files = collectReleaseFiles(root);
-    const previousVersion = "0.5.0";
+    const previousVersion = "0.5.1";
     files.set("synthetic.md", `bunx @vaur94/agz-memory@${previousVersion}`);
     expect(validateReleaseFiles(files)).toContain(
       "synthetic.md: contains previous active package version",
@@ -119,7 +119,7 @@ describe("release surface", () => {
   test("rejects extra HTTP catalog entries", () => {
     const files = collectReleaseFiles(root);
     const catalog = JSON.parse(files.get("skills/index.json")!) as { skills: unknown[] };
-    catalog.skills.push({ name: "unexpected", version: "0.5.1", files: ["unexpected.md"] });
+    catalog.skills.push({ name: "unexpected", version: "0.5.2", files: ["unexpected.md"] });
     files.set("skills/index.json", JSON.stringify(catalog));
     expect(validateReleaseFiles(files)).toContain(
       "skills/index.json: must contain exactly one skill",
@@ -347,7 +347,7 @@ describe("release surface", () => {
       ".github/workflows/ci.yml",
       files
         .get(".github/workflows/ci.yml")!
-        .replace("vaur94-agz-memory-${VERSION}.tgz", "vaur94-agz-memory-0.5.1.tgz"),
+        .replace("vaur94-agz-memory-${VERSION}.tgz", "vaur94-agz-memory-" + "0.5.1.tgz"),
     );
     expect(validateReleaseFiles(files)).toContain(
       '.github/workflows/ci.yml: missing "CORE_TARBALL=\\"$RUNNER_TEMP/agz-pack/vaur94-agz-memory-${VERSION}.tgz\\""',
