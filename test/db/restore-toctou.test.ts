@@ -21,6 +21,7 @@ describe("verified restore source identity", () => {
       const targetStore = new MemoryStore(target.db);
       const targetProject = targetStore.createProject("Original").project!.projectID;
       targetStore.update(targetProject, {
+        operation: "create",
         kind: "fact",
         title: "original",
         summary: "original",
@@ -34,6 +35,7 @@ describe("verified restore source identity", () => {
       const alternateStore = new MemoryStore(alternate.db);
       const alternateProject = alternateStore.createProject("Replacement").project!.projectID;
       alternateStore.update(alternateProject, {
+        operation: "create",
         kind: "fact",
         title: "replacement",
         summary: "replacement",

@@ -16,10 +16,10 @@ describe("hybrid retrieval", () => {
     const memory = new MemoryStore(opened.db);
     const alpha = memory.createProject("Alpha").project!.projectID;
     const beta = memory.createProject("Beta").project!.projectID;
-    const direct = memory.update(alpha, { kind: "fact", title: "alpha token", summary: "alpha token" }).id!;
-    const neighbor = memory.update(alpha, { kind: "fact", title: "neighbor", summary: "neighbor" }).id!;
-    const unverified = memory.update(alpha, { kind: "fact", title: "unverified", summary: "unverified" }).id!;
-    const other = memory.update(beta, { kind: "fact", title: "alpha leak", summary: "alpha leak" }).id!;
+    const direct = memory.update(alpha, { operation: "create", kind: "fact", title: "alpha token", summary: "alpha token" }).id!;
+    const neighbor = memory.update(alpha, { operation: "create", kind: "fact", title: "neighbor", summary: "neighbor" }).id!;
+    const unverified = memory.update(alpha, { operation: "create", kind: "fact", title: "unverified", summary: "unverified" }).id!;
+    const other = memory.update(beta, { operation: "create", kind: "fact", title: "alpha leak", summary: "alpha leak" }).id!;
     memory.link(alpha, direct, neighbor, "ABOUT");
     const revision = (
       opened.db.query("SELECT current_revision FROM notes WHERE id = ?").get(direct) as {

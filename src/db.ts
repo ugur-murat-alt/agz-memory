@@ -71,15 +71,43 @@ export interface OpenedDB {
   close: () => void;
 }
 
-export function openMemoryDatabase(path: string): OpenedDB {
+export type MigrationStage =
+  | "source-validation"
+  | "backup-checkpoint"
+  | "v2-import"
+  | "v8-to-v9"
+  | "v9-to-v10"
+  | "v10-to-v11"
+  | "fingerprint"
+  | "deep-health";
+
+export interface MigrationTiming {
+  phases: Array<{ stage: MigrationStage; elapsedMs: number }>;
+}
+
+export function createMigrationTimingCollector(): MigrationTiming {
+  return { phases: [] };
+}
+
+function timeMigrationStage<T>(timing: MigrationTiming | undefined, stage: MigrationStage, work: () => T): T {
+  if (!timing) return work();
+  const started = performance.now();
+  try {
+    return work();
+  } finally {
+    timing.phases.push({ stage, elapsedMs: Math.round((performance.now() - started) * 1000) / 1000 });
+  }
+}
+
+export function openMemoryDatabase(path: string, options: { timing?: MigrationTiming } = {}): OpenedDB {
   ensureDatabaseParent(path);
-  assertSupportedDatabaseBeforeOpen(path);
+  assertSupportedDatabaseBeforeOpen(path, false);
   recoverStaleMaintenanceGate(path, () => assertSupportedDatabaseBeforeOpen(path));
   let lock: MigrationLock | undefined = acquireMigrationLock(path, SCHEMA_VERSION);
   let lease: DatabaseLease | undefined = acquireDatabaseLease(path);
   let db: Database;
   try {
-    assertSupportedDatabaseBeforeOpen(path);
+    assertSupportedDatabaseBeforeOpen(path, false);
     db = openDatabase(path);
   } catch (error) {
     lease.release();
@@ -104,7 +132,7 @@ export function openMemoryDatabase(path: string): OpenedDB {
       lease.release();
       lease = undefined;
       lease = acquireDatabaseLease(path);
-      assertSupportedDatabaseBeforeOpen(path);
+      assertSupportedDatabaseBeforeOpen(path, false);
       db = openDatabase(path);
       dbOpen = true;
       if (hasApplicationObjects(db)) {
@@ -156,7 +184,7 @@ export function openMemoryDatabase(path: string): OpenedDB {
       lease.release();
       lease = undefined;
       lease = acquireDatabaseLease(path);
-      assertSupportedDatabaseBeforeOpen(path);
+      assertSupportedDatabaseBeforeOpen(path, false);
       db = openDatabase(path);
       dbOpen = true;
       let migrationVersion = getSchemaVersion(db);
@@ -185,7 +213,7 @@ export function openMemoryDatabase(path: string): OpenedDB {
       lease = undefined;
 
       maintenance = acquireMaintenanceGate(path);
-      assertSupportedDatabaseBeforeOpen(path);
+      timeMigrationStage(options.timing, "source-validation", () => assertSupportedDatabaseBeforeOpen(path, false));
       db = openDatabase(path);
       dbOpen = true;
       migrationVersion = getSchemaVersion(db);
@@ -215,18 +243,14 @@ export function openMemoryDatabase(path: string): OpenedDB {
         lease = undefined;
         return opened;
       }
-      backup = createVerifiedBackup(
-        db,
-        path,
-        migrationVersion?.version ?? 2,
-        SCHEMA_VERSION,
-        PRODUCT_VERSION,
+      backup = timeMigrationStage(options.timing, "backup-checkpoint", () =>
+        createVerifiedBackup(db, path, migrationVersion?.version ?? 2, SCHEMA_VERSION, PRODUCT_VERSION),
       );
       db.exec("PRAGMA foreign_keys=OFF");
       if (!migrationVersion && hasLegacyV2(db)) {
         db.exec(DDL);
         db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(id UNINDEXED, title, summary, content, tokenize='unicode61')");
-        migrateFromV2(db, path);
+        timeMigrationStage(options.timing, "v2-import", () => migrateFromV2(db, path));
       } else if (!migrationVersion) {
         db.exec(DDL);
         db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(id UNINDEXED, title, summary, content, tokenize='unicode61')");
@@ -243,24 +267,33 @@ export function openMemoryDatabase(path: string): OpenedDB {
 
       let version = getSchemaVersion(db)?.version ?? 8;
       if (version < 9) {
-        db.transaction(() => migrateV8ToV9(db))();
+        timeMigrationStage(options.timing, "v8-to-v9", () =>
+          db.transaction(() => migrateV8ToV9(db))(),
+        );
         version = 9;
       }
       if (version < 10) {
-        db.transaction(() => migrateV9ToV10(db))();
+        timeMigrationStage(options.timing, "v9-to-v10", () =>
+          db.transaction(() => migrateV9ToV10(db))(),
+        );
         version = 10;
       }
       if (version < SCHEMA_VERSION) {
-        db.transaction(() => {
-          db.exec(`PRAGMA application_id = ${APPLICATION_ID}`);
-          migrateV10ToV11(db);
-        })();
+        timeMigrationStage(options.timing, "v10-to-v11", () =>
+          db.transaction(() => {
+            db.exec(`PRAGMA application_id = ${APPLICATION_ID}`);
+            migrateV10ToV11(db);
+          })(),
+        );
       }
       db.exec("PRAGMA foreign_keys=ON");
       if ((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1) {
         throw new Error("failed to enable database foreign keys");
       }
-      assertHealthyDatabase(db);
+      timeMigrationStage(options.timing, "fingerprint", () => assertSchemaV11(db));
+      timeMigrationStage(options.timing, "deep-health", () =>
+        assertHealthyDatabase(db, { verifySchema: false }),
+      );
       console.warn(
         `[agz-memory] migrated to v${SCHEMA_VERSION} (backup: ${backup.manifestPath})`,
       );
@@ -382,11 +415,11 @@ function openDatabase(path: string): Database {
   }
 }
 
-function assertSupportedDatabaseBeforeOpen(path: string): void {
+function assertSupportedDatabaseBeforeOpen(path: string, verifyHealth = true): void {
   const deadline = Date.now() + PRE_OPEN_PROBE_TIMEOUT_MS;
   while (true) {
     try {
-      assertSupportedDatabaseBeforeOpenOnce(path);
+      assertSupportedDatabaseBeforeOpenOnce(path, verifyHealth);
       return;
     } catch (error) {
       if (!isSQLiteBusyError(error) || Date.now() >= deadline) throw error;
@@ -395,19 +428,19 @@ function assertSupportedDatabaseBeforeOpen(path: string): void {
   }
 }
 
-function assertSupportedDatabaseBeforeOpenOnce(path: string): void {
+function assertSupportedDatabaseBeforeOpenOnce(path: string, verifyHealth: boolean): void {
   assertDatabasePath(path);
   if (!existsSync(path)) return;
   const db = new Database(path, { readonly: true });
   try {
     assertDatabasePath(path);
-    assertSupportedDatabase(db);
+    assertSupportedDatabase(db, verifyHealth);
   } finally {
     db.close();
   }
 }
 
-function assertSupportedDatabase(db: Database): void {
+function assertSupportedDatabase(db: Database, verifyHealth = true): void {
   const existingVersion = getSchemaVersion(db);
   if (existingVersion && existingVersion.version > SCHEMA_VERSION) {
     throw new Error(
@@ -418,7 +451,7 @@ function assertSupportedDatabase(db: Database): void {
   const hasV11Marker = hasV11IdentityMarker(db);
   if (!existingVersion) {
     if (!hasLegacyV2(db)) throw new Error("unrecognized_database");
-    assertLegacySchemaIdentity(db, 2);
+    assertLegacySchemaIdentity(db, 2, { verifyHealth });
     return;
   }
   if (existingVersion.version === SCHEMA_VERSION || hasV11Marker) {
@@ -428,7 +461,7 @@ function assertSupportedDatabase(db: Database): void {
   if (existingVersion.version < 2 || existingVersion.version > 10) {
     throw new Error("unrecognized_database");
   }
-  assertLegacySchemaIdentity(db, existingVersion.version);
+  assertLegacySchemaIdentity(db, existingVersion.version, { verifyHealth });
 }
 
 function assertDatabasePath(path: string): void {

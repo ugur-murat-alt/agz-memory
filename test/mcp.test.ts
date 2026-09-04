@@ -39,6 +39,13 @@ function parseTextResult(result: Awaited<ReturnType<Client["callTool"]>>) {
   return JSON.parse(block.text);
 }
 
+function parseErrorResult(result: Awaited<ReturnType<Client["callTool"]>>) {
+  const block = result.content[0];
+  if (!block || block.type !== "text") throw new Error("expected text tool result");
+  expect(result.isError).toBe(true);
+  return JSON.parse(block.text);
+}
+
 async function createProject(client: Client, name: string): Promise<string> {
   const body = parseTextResult(
     await client.callTool({ name: "project_create", arguments: { projectName: name } }),
@@ -205,6 +212,7 @@ describe("project-scoped memory MCP server", () => {
     const store = new MemoryStore(migrated.db);
     const secondProjectID = store.createProject("Second").project!.projectID;
     const secondNoteID = store.update(secondProjectID, {
+      operation: "create",
       kind: "fact",
       title: "second",
       summary: "second",
@@ -369,10 +377,10 @@ describe("project-scoped memory MCP server", () => {
     await createProject(client, "Beta");
     const stableNote = await createNote(client, { projectID: alphaID }, "stable project note");
 
-    const duplicate = parseTextResult(
+    const duplicate = parseErrorResult(
       await client.callTool({ name: "project_create", arguments: { projectName: " alpha " } }),
     );
-    expect(duplicate.results[0].ok).toBe(false);
+    expect(duplicate.error).toMatchObject({ code: "conflict", retryable: false });
 
     const renamed = parseTextResult(
       await client.callTool({
@@ -385,10 +393,10 @@ describe("project-scoped memory MCP server", () => {
       projectName: "Gamma",
     });
 
-    const oldName = parseTextResult(
+    const oldName = parseErrorResult(
       await client.callTool({ name: "memory_recall", arguments: { projectName: "Alpha", query: "x" } }),
     );
-    expect(oldName.results[0].ok).toBe(false);
+    expect(oldName.error).toMatchObject({ code: "not_found", retryable: false });
     const noteID = await createNote(client, { projectName: "gamma" }, "rename-safe note");
     expect(noteID).toBeString();
     const stableRead = parseTextResult(
@@ -405,6 +413,165 @@ describe("project-scoped memory MCP server", () => {
     expect(
       listed.projects.map(({ projectName }: { projectName: string }) => projectName),
     ).toEqual(["Beta", "Gamma"]);
+  });
+
+  test("paginates recall beyond the requested first page and rejects stale snapshots", async () => {
+    const client = await createHarness();
+    const projectID = await createProject(client, "Recall pages");
+    const firstNote = await createNote(client, { projectID }, "needle first");
+    const secondNote = await createNote(client, { projectID }, "needle second");
+    const first = parseTextResult(await client.callTool({
+      name: "memory_recall",
+      arguments: { projectID, query: "needle", limit: 1 },
+    })).results[0];
+    expect(first.nextCursor).toEqual(expect.any(String));
+    const second = parseTextResult(await client.callTool({
+      name: "memory_recall",
+      arguments: { projectID, query: "needle", limit: 1, cursor: first.nextCursor, snapshot: first.snapshot },
+    })).results[0];
+    expect([first.cards[0].id, second.cards[0].id].sort()).toEqual([firstNote, secondNote].sort());
+
+    await createNote(client, { projectID }, "needle third");
+    const stale = parseErrorResult(await client.callTool({
+      name: "memory_recall",
+      arguments: { projectID, query: "needle", limit: 1, cursor: first.nextCursor, snapshot: first.snapshot },
+    }));
+    expect(stale.error.code).toBe("stale_cursor");
+  });
+
+  test("does not revive a stale recall cursor when a project is renamed away and back", async () => {
+    const client = await createHarness();
+    const projectID = await createProject(client, "Rename snapshot A");
+    await createNote(client, { projectID }, "renamecursor first");
+    await createNote(client, { projectID }, "renamecursor second");
+    const first = parseTextResult(await client.callTool({
+      name: "memory_recall",
+      arguments: { projectID, query: "renamecursor", limit: 1 },
+    })).results[0];
+    const listed = parseTextResult(await client.callTool({ name: "project_list", arguments: {} }));
+    const project = listed.projects.find((item: { projectID: string }) => item.projectID === projectID);
+    const originalNow = Date.now;
+    Date.now = () => project.updatedAt;
+    try {
+      await createNote(client, { projectID }, "renamecursor third");
+      await client.callTool({
+        name: "project_update",
+        arguments: { projectID, projectName: "Rename snapshot B" },
+      });
+      await client.callTool({
+        name: "project_update",
+        arguments: { projectID, projectName: "Rename snapshot A" },
+      });
+      const stale = parseErrorResult(await client.callTool({
+        name: "memory_recall",
+        arguments: {
+          projectID,
+          query: "renamecursor",
+          limit: 1,
+          cursor: first.nextCursor,
+          snapshot: first.snapshot,
+        },
+      }));
+      expect(stale.error.code).toBe("stale_cursor");
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("keeps every direct recall match reachable beyond the first 101 candidates", async () => {
+    const client = await createHarness();
+    const projectID = await createProject(client, "Large recall pages");
+    const createdIDs: string[] = [];
+    for (let offset = 0; offset < 102; offset += 10) {
+      const updates = Array.from({ length: Math.min(10, 102 - offset) }, (_, index) => ({
+        kind: "fact",
+        title: `paginationneedle ${String(offset + index).padStart(3, "0")}`,
+        summary: "paginationneedle",
+      }));
+      const created = parseTextResult(await client.callTool({
+        name: "memory_update",
+        arguments: { projectID, updates },
+      }));
+      createdIDs.push(...created.results.map(({ id }: { id: string }) => id));
+    }
+
+    const first = parseTextResult(await client.callTool({
+      name: "memory_recall",
+      arguments: { projectID, query: "paginationneedle", limit: 100 },
+    })).results[0];
+    const second = parseTextResult(await client.callTool({
+      name: "memory_recall",
+      arguments: {
+        projectID,
+        query: "paginationneedle",
+        limit: 100,
+        cursor: first.nextCursor,
+        snapshot: first.snapshot,
+      },
+    })).results[0];
+    const recalledIDs = [...first.cards, ...second.cards].map(({ id }: { id: string }) => id);
+    expect(first.cards).toHaveLength(100);
+    expect(second.cards).toHaveLength(2);
+    expect(second.nextCursor).toBeUndefined();
+    expect(new Set(recalledIDs)).toEqual(new Set(createdIDs));
+  });
+
+  test("rejects an empty cursor on every paginated tool", async () => {
+    const client = await createHarness();
+    const projectID = await createProject(client, "Empty cursor");
+    const noteID = await createNote(client, { projectID }, "empty cursor note");
+    for (const request of [
+      { name: "project_list", arguments: { cursor: "" } },
+      { name: "memory_recall", arguments: { projectID, query: "empty", cursor: "" } },
+      { name: "memory_read", arguments: { projectID, id: noteID, cursor: "" } },
+    ]) {
+      const body = parseErrorResult(await client.callTool(request));
+      expect(body.error).toMatchObject({ code: "invalid_cursor", retryable: false });
+    }
+  });
+
+  test("invalidates a project-list page when its returned note counts change", async () => {
+    const client = await createHarness();
+    const alpha = await createProject(client, "Alpha pages");
+    await createProject(client, "Beta pages");
+    const first = parseTextResult(await client.callTool({ name: "project_list", arguments: { limit: 1 } }));
+    expect(first.nextCursor).toEqual(expect.any(String));
+    await createNote(client, { projectID: alpha }, "changes count");
+    const stale = parseErrorResult(await client.callTool({
+      name: "project_list",
+      arguments: { limit: 1, cursor: first.nextCursor, snapshot: first.snapshot },
+    }));
+    expect(stale.error.code).toBe("stale_cursor");
+  });
+
+  test("bounds edges and pagination metadata in default and batch memory reads", async () => {
+    const client = await createHarness();
+    const projectID = await createProject(client, "Read edge pages");
+    const source = await createNote(client, { projectID }, "edge source");
+    const targets: string[] = [];
+    for (let offset = 0; offset < 101; offset += 10) {
+      const updates = Array.from({ length: Math.min(10, 101 - offset) }, (_, index) => ({
+        kind: "fact",
+        title: `edge target ${offset + index}`,
+        summary: "edge target",
+      }));
+      const created = parseTextResult(await client.callTool({ name: "memory_update", arguments: { projectID, updates } }));
+      const chunk = created.results.map(({ id }: { id: string }) => id);
+      targets.push(...chunk);
+      const linked = parseTextResult(await client.callTool({
+        name: "memory_link",
+        arguments: { projectID, links: chunk.map((targetID: string) => ({ sourceID: source, targetID, predicate: "ABOUT" })) },
+      }));
+      expect(linked.results.every(({ ok }: { ok: boolean }) => ok)).toBe(true);
+    }
+    const defaultRead = parseTextResult(await client.callTool({ name: "memory_read", arguments: { projectID, id: source } }));
+    expect(defaultRead.results[0].result.edges).toHaveLength(100);
+    expect(defaultRead.results[0].result.nextCursor).toEqual(expect.any(String));
+    const batchRead = parseTextResult(await client.callTool({ name: "memory_read", arguments: { projectID, ids: [source, targets[0]] } }));
+    expect(batchRead.results[0].result.edges).toHaveLength(100);
+    expect(batchRead.results[0].result).toMatchObject({ snapshot: expect.any(String), etag: expect.any(String), nextCursor: expect.any(String) });
+    expect(batchRead.results[1].result.edges).toHaveLength(1);
+    expect(batchRead.results[1].result).toMatchObject({ snapshot: expect.any(String), etag: expect.any(String) });
   });
 
   test("isolates notes, search, graph, and pin state by project", async () => {
@@ -424,15 +591,15 @@ describe("project-scoped memory MCP server", () => {
 
     const prioritized = await createNote(client, { projectID: alphaID }, "shared keyword pinned");
 
-    const wrongProjectRead = parseTextResult(
+    const wrongProjectRead = parseErrorResult(
       await client.callTool({
         name: "memory_read",
         arguments: { projectID: betaID, id: alphaNote },
       }),
     );
-    expect(wrongProjectRead.results[0].result.reason).toContain("not found");
+    expect(wrongProjectRead.error).toMatchObject({ code: "not_found", retryable: false });
 
-    const crossProjectLink = parseTextResult(
+    const crossProjectLink = parseErrorResult(
       await client.callTool({
         name: "memory_link",
         arguments: {
@@ -443,7 +610,7 @@ describe("project-scoped memory MCP server", () => {
         },
       }),
     );
-    expect(crossProjectLink.results[0].ok).toBe(false);
+    expect(crossProjectLink.error).toMatchObject({ code: "not_found", retryable: false });
 
     const pinned = parseTextResult(
       await client.callTool({
@@ -479,11 +646,13 @@ describe("project-scoped memory MCP server", () => {
     const alphaID = store.createProject("Alpha").project!.projectID;
     const betaID = store.createProject("Beta").project!.projectID;
     const alphaNote = store.update(alphaID, {
+      operation: "create",
       kind: "fact",
       title: "alpha",
       summary: "alpha",
     }).id!;
     const betaNote = store.update(betaID, {
+      operation: "create",
       kind: "fact",
       title: "beta",
       summary: "beta",
@@ -555,7 +724,7 @@ describe("project-scoped memory MCP server", () => {
     });
     expect(invalidPhrase.isError).toBe(true);
 
-    const wrongName = parseTextResult(
+    const wrongName = parseErrorResult(
       await client.callTool({
         name: "project_delete",
         arguments: {
@@ -565,7 +734,7 @@ describe("project-scoped memory MCP server", () => {
         },
       }),
     );
-    expect(wrongName.results[0].ok).toBe(false);
+    expect(wrongName.error).toMatchObject({ code: "invalid_request", retryable: false });
 
     const deleted = parseTextResult(
       await client.callTool({
@@ -583,7 +752,7 @@ describe("project-scoped memory MCP server", () => {
       projectID,
       deletedCounts: { notes: 2, edges: 1, pinned: 1 },
     });
-    const repeated = parseTextResult(
+    const repeated = parseErrorResult(
       await client.callTool({
         name: "project_delete",
         arguments: {
@@ -593,7 +762,7 @@ describe("project-scoped memory MCP server", () => {
         },
       }),
     );
-    expect(repeated.results[0].ok).toBe(false);
+    expect(repeated.error).toMatchObject({ code: "not_found", retryable: false });
     const listed = parseTextResult(
       await client.callTool({ name: "project_list", arguments: {} }),
     );

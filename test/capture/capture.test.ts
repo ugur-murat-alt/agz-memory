@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "fs";
+import { chmodSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { openMemoryDatabase } from "../../src/db";
@@ -16,8 +16,11 @@ import {
   type MemoryCandidateV1,
 } from "../../src/capture/contract";
 import { PRODUCT_VERSION } from "../../src/version";
+import { QuarantineKeyring } from "../../src/security/quarantine-key";
+import { quarantinePrivacyReport } from "../../src/admin/quarantine";
 
 describe("capture safety core", () => {
+  const keyringTest = process.platform === "win32" ? test.skip : test;
   test("uses stable native identity hashes and strict bounded events", () => {
     expect(
       captureIdempotencyKey({
@@ -70,12 +73,13 @@ describe("capture safety core", () => {
     expect(redacted.replacements).toBe(1);
   });
 
-  test("stores one event per native identity, quarantines private keys, and materializes explicit memory", () => {
+  keyringTest("stores one event per native identity, quarantines private keys, and materializes explicit memory", () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-capture-"));
     const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
     const memory = new MemoryStore(opened.db, ["fake@1"]);
     const projectID = memory.createProject("Capture").project!.projectID;
-    const capture = new CaptureStore(opened.db, ["fake@1"]);
+    const quarantineKeyring = new QuarantineKeyring(join(directory, "quarantine.keys"));
+    const capture = new CaptureStore(opened.db, ["fake@1"], { quarantineKeyring });
     const binding = capture.bindProject({
       memoryProjectID: projectID,
       opencodeProjectID: "oc-project",
@@ -100,13 +104,88 @@ describe("capture safety core", () => {
       { ...candidate, title: "Kararım", summary: privateKey, content: privateKey },
     );
     expect(capture.ingest(risky, "auto-write").outcome).toBe("quarantined");
+    expect(capture.ingest(risky, "auto-write")).toMatchObject({ outcome: "duplicate", existing: true });
+    quarantineKeyring.rotate();
+    expect(capture.ingest(risky, "auto-write")).toMatchObject({ outcome: "duplicate", existing: true });
+    const changedRisky = {
+      ...structuredClone(risky),
+      candidate: { ...risky.candidate!, content: `${privateKey}\nchanged` },
+    };
+    expect(() => capture.ingest(changedRisky, "auto-write")).toThrow("idempotency_conflict");
     const stored = opened.db
-      .query("SELECT payload_json FROM capture_events WHERE idempotency_key = ?")
-      .get(risky.idempotencyKey) as { payload_json: string | null };
+      .query("SELECT payload_json, payload_hash, redaction_version FROM capture_events WHERE idempotency_key = ?")
+      .get(risky.idempotencyKey) as {
+      payload_json: string | null;
+      payload_hash: string | null;
+      redaction_version: string;
+    };
     expect(stored.payload_json).toBeNull();
+    expect(stored.payload_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(stored.redaction_version).toMatch(
+      /^redaction\/1;quarantine-key=[0-9a-f]{24};quarantine-digest=2$/,
+    );
     expect(JSON.stringify(opened.db.query("SELECT * FROM capture_events").all())).not.toContain("abc123");
+    const privacyReport = quarantinePrivacyReport(opened.db);
+    expect(privacyReport).toMatchObject({
+      quarantinedEvents: 1,
+      keyedEvents: 1,
+      unavailableKeyEvents: 0,
+      legacyOrUnknownEvents: 0,
+      digest: {
+        algorithm: "HMAC-SHA256",
+        input: "quarantine-source-identity-and-redacted-payload/2",
+        storage: "capture_events.payload_hash",
+      },
+    });
+    expect(privacyReport.keyIDs).toEqual([stored.redaction_version.slice(27, 51)]);
+    expect(JSON.stringify(privacyReport)).not.toContain("abc123");
     opened.close();
     rmSync(directory, { recursive: true, force: true });
+  });
+
+  keyringTest("fails closed when the quarantine keyring becomes insecure", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agz-memory-capture-keyring-"));
+    const opened = openMemoryDatabase(join(directory, "memory.sqlite"));
+    try {
+      const memory = new MemoryStore(opened.db);
+      const projectID = memory.createProject("Quarantine keyring").project!.projectID;
+      const keyPath = join(directory, "quarantine.keys");
+      const keyring = new QuarantineKeyring(keyPath);
+      keyring.ensureActiveKey();
+      chmodSync(keyPath, 0o644);
+      const capture = new CaptureStore(opened.db, [], { quarantineKeyring: keyring });
+      const binding = capture.bindProject({
+        memoryProjectID: projectID,
+        opencodeProjectID: "oc-project",
+        canonicalDirectory: "/canonical/project",
+      });
+      const canary = "QUARANTINE_PRIVATE_CANARY_abcdefghijklmno";
+      const candidate = extractExplicitUserCandidate("Kararım: karantinayı doğrula.")!;
+      const risky = userEvent(projectID, binding.bindingKey, "session", "message", {
+        ...candidate,
+        summary: `-----BEGIN PRIVATE KEY-----\n${canary}\n-----END PRIVATE KEY-----`,
+        content: `-----BEGIN PRIVATE KEY-----\n${canary}\n-----END PRIVATE KEY-----`,
+      });
+      expect(capture.ingest(risky, "shadow").outcome).toBe("quarantined");
+      expect(() => capture.ingest(risky, "shadow")).toThrow("idempotency_conflict");
+      const stored = opened.db
+        .query("SELECT payload_json, payload_hash, redaction_version FROM capture_events WHERE idempotency_key = ?")
+        .get(risky.idempotencyKey) as {
+        payload_json: string | null;
+        payload_hash: string | null;
+        redaction_version: string;
+      };
+      expect(stored).toEqual({
+        payload_json: null,
+        payload_hash: null,
+        redaction_version: "redaction/1;quarantine-key=unavailable;quarantine-digest=2",
+      });
+      expect(JSON.stringify(opened.db.query("SELECT * FROM capture_events").all())).not.toContain(canary);
+      expect(JSON.stringify(quarantinePrivacyReport(opened.db))).not.toContain(canary);
+    } finally {
+      opened.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("atomically supersedes only an explicit matching target", () => {

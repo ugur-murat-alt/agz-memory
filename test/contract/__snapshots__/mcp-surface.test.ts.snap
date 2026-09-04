@@ -295,14 +295,27 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
         {
           "additionalProperties": false,
           "properties": {
+            "cursor": {
+              "maxLength": 2048,
+              "type": "string",
+            },
             "id": {
               "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
               "type": "string",
+            },
+            "limit": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
             },
             "projectID": {
               "description": "The immutable project UUID returned by project_create or project_list.",
               "format": "uuid",
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string",
+            },
+            "snapshot": {
+              "maxLength": 1024,
               "type": "string",
             },
           },
@@ -341,14 +354,27 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
         {
           "additionalProperties": false,
           "properties": {
+            "cursor": {
+              "maxLength": 2048,
+              "type": "string",
+            },
             "id": {
               "description": "A note ID returned by memory_update, memory_recall, or memory_read.",
               "type": "string",
+            },
+            "limit": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
             },
             "projectName": {
               "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
               "minLength": 1,
+              "type": "string",
+            },
+            "snapshot": {
+              "maxLength": 1024,
               "type": "string",
             },
           },
@@ -404,6 +430,15 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
         {
           "additionalProperties": false,
           "properties": {
+            "cursor": {
+              "maxLength": 2048,
+              "type": "string",
+            },
+            "limit": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
             "projectID": {
               "description": "The immutable project UUID returned by project_create or project_list.",
               "format": "uuid",
@@ -412,6 +447,10 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
             },
             "query": {
               "description": "Search terms for durable records in the selected project.",
+              "type": "string",
+            },
+            "snapshot": {
+              "maxLength": 1024,
               "type": "string",
             },
           },
@@ -450,6 +489,15 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
         {
           "additionalProperties": false,
           "properties": {
+            "cursor": {
+              "maxLength": 2048,
+              "type": "string",
+            },
+            "limit": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
             "projectName": {
               "description": "The project's unique current name used to select it. Prefer projectID for long-lived references.",
               "maxLength": 120,
@@ -458,6 +506,10 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
             },
             "query": {
               "description": "Search terms for durable records in the selected project.",
+              "type": "string",
+            },
+            "snapshot": {
+              "maxLength": 1024,
               "type": "string",
             },
           },
@@ -986,7 +1038,21 @@ exports[`MCP compatibility surface keeps initialize identity, instructions, and 
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "cursor": {
+          "maxLength": 2048,
+          "type": "string",
+        },
+        "limit": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+        },
+        "snapshot": {
+          "maxLength": 1024,
+          "type": "string",
+        },
+      },
       "type": "object",
     },
     "name": "project_list",
