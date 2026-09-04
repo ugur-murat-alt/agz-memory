@@ -7,12 +7,12 @@ import {
   lstatSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
 } from "fs";
 import { basename, dirname, resolve } from "path";
 import { resolveConfig } from "../config";
 import { openMemoryDatabase, openReadOnlyMemoryDatabase } from "../db";
-import { hashTuple } from "../hash";
 import {
   createVerifiedBackup,
   restoreVerifiedBackup,
@@ -26,19 +26,33 @@ import {
 } from "../db/maintenance";
 import { doctorDatabase } from "./doctor";
 import { SCHEMA_VERSION } from "../types";
-import { deriveDocument } from "../retrieval/derived";
 import { PRODUCT_VERSION } from "../version";
+import { quarantinePrivacyReport } from "./quarantine";
+import { runResumableReindex } from "./reindex";
 
 export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
-  const databasePath = resolveConfig().databasePath;
-  const [command, subcommand] = argv;
-  if (!command) throw new Error("admin command is required");
+  const parsed = parseAdminArguments(argv);
+  const configuredDatabasePath = resolveConfig().databasePath;
+  const database = parsed.command === "init"
+    ? undefined
+    : requireExistingDatabase(configuredDatabasePath, parsed.databaseID);
+  const databasePath = database?.path ?? configuredDatabasePath;
+  const [command, subcommand] = [parsed.command, parsed.subcommand];
+
+  if (command === "init") {
+    const opened = openMemoryDatabase(databasePath);
+    try {
+      return withDatabaseIdentity({ initialized: true }, databaseIdentity(opened.db, databasePath));
+    } finally {
+      opened.close();
+    }
+  }
 
   if (command === "doctor") {
     requireExistingDatabase(databasePath);
     const opened = openReadOnlyMemoryDatabase(databasePath);
     try {
-      return doctorDatabase(opened.db);
+      return withDatabaseIdentity(doctorDatabase(opened.db), database!);
     } finally {
       opened.close();
     }
@@ -50,7 +64,7 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
       const db = new Database(databasePath);
       try {
         const version = schemaVersion(db);
-        return createVerifiedBackup(db, databasePath, version, version, PRODUCT_VERSION);
+        return withDatabaseIdentity(createVerifiedBackup(db, databasePath, version, version, PRODUCT_VERSION), database!);
       } finally {
         db.close();
       }
@@ -63,7 +77,7 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
     }
     const opened = openMemoryDatabase(databasePath);
     try {
-      return doctorDatabase(opened.db);
+      return withDatabaseIdentity(doctorDatabase(opened.db), database!);
     } finally {
       opened.close();
     }
@@ -77,7 +91,7 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
     const confirmation = option(argv, "--confirm");
     const expectedHash = option(argv, "--sha256");
     if (!confirmation || !expectedHash) {
-      return { dryRun: true, manifest: verified.manifest, targetPath: databasePath };
+      return withDatabaseIdentity({ dryRun: true, manifest: verified.manifest, targetPath: databasePath }, database!);
     }
     if (expectedHash !== verified.manifest.sha256) throw new Error("restore manifest hash mismatch");
     const maintenanceOwner = option(argv, "--maintenance-owner");
@@ -109,7 +123,7 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
           maintenance,
           expectedHash,
         );
-        return { restored: true, preservedPath, manifest: verified.manifest };
+        return withDatabaseIdentity({ restored: true, preservedPath, manifest: verified.manifest }, database!);
       },
       recovery as MaintenanceRecovery | undefined,
     );
@@ -120,7 +134,7 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
     const confirmation = option(argv, "--confirm");
     if (!ownerID || !confirmation) throw new Error("unlock requires --owner and --confirm");
     breakMigrationLock(databasePath, ownerID, confirmation);
-    return { unlocked: true, ownerID };
+    return withDatabaseIdentity({ unlocked: true, ownerID }, database!);
   }
 
   if (command === "reindex") {
@@ -128,120 +142,20 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
     if (!backend || !/^[a-z0-9][a-z0-9._-]{0,79}$/i.test(backend)) {
       throw new Error("reindex requires a valid --backend");
     }
-    const opened = openMemoryDatabase(databasePath);
-    try {
-      const now = Date.now();
-      let queued = 0;
-      let purges = 0;
-      const quarantined: Record<string, number> = {};
-      let generation = 0;
-      const insert = opened.db.query(`
-        INSERT INTO index_outbox
-          (backend, operation_key, operation, project_id, note_id, revision, content_hash,
-           generation, lease_generation, fence, state, attempt_count, available_at,
-           heartbeat_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'pending', 0, ?, NULL, ?)
-      `);
-      opened.db.exec("BEGIN IMMEDIATE");
-      try {
-        generation = (
-          opened.db
-            .query(
-              "SELECT COALESCE(MAX(generation), 0) + 1 AS generation FROM index_outbox WHERE backend = ?",
-            )
-            .get(backend) as { generation: number }
-        ).generation;
-        const projects = opened.db
-          .query("SELECT id FROM projects ORDER BY id")
-          .all() as Array<{ id: string }>;
-        const notes = opened.db
-          .query("SELECT * FROM notes WHERE status = 'active' ORDER BY project_id, id")
-          .all() as Array<{
-          id: string;
-          project_id: string;
-          current_revision: number;
-          kind: string;
-          title: string;
-          summary: string;
-          content: string;
-        }>;
-        for (const project of projects) {
-          const operation = "purge-project" as const;
-          const operationKey = outboxOperationKey(
-            backend,
-            operation,
-            project.id,
-            null,
-            null,
-            null,
-            generation,
-          );
-          purges += insert.run(
-            backend,
-            operationKey,
-            operation,
-            project.id,
-            null,
-            null,
-            null,
-            generation,
-            now,
-            now,
-          ).changes;
-        }
-        for (const note of notes) {
-          const document = deriveDocument({
-            projectID: note.project_id,
-            noteID: note.id,
-            revision: note.current_revision,
-            kind: note.kind,
-            title: note.title,
-            summary: note.summary,
-            content: note.content,
-          });
-          if (!document) {
-            quarantined.derived_document_unavailable =
-              (quarantined.derived_document_unavailable ?? 0) + 1;
-            continue;
-          }
-          const operation = "upsert-note" as const;
-          const operationKey = outboxOperationKey(
-            backend,
-            operation,
-            note.project_id,
-            note.id,
-            note.current_revision,
-            document.contentHash,
-            generation,
-          );
-          queued += insert.run(
-            backend,
-            operationKey,
-            operation,
-            note.project_id,
-            note.id,
-            note.current_revision,
-            document.contentHash,
-            generation,
-            now,
-            now,
-          ).changes;
-        }
-        opened.db.exec("COMMIT");
-      } catch (error) {
-        try {
-          opened.db.exec("ROLLBACK");
-        } catch {}
-        throw error;
-      }
-      return { backend, generation, purges, queued, quarantined };
-    } finally {
-      opened.close();
-    }
+    return withDatabaseIdentity(
+      runResumableReindex(
+        databasePath,
+        database!.databaseID,
+        backend,
+        Number(option(argv, "--batch-size") ?? 100),
+        option(argv, "--max-batches") === undefined ? undefined : Number(option(argv, "--max-batches")),
+      ),
+      database!,
+    );
   }
 
   if (command === "outbox" && subcommand === "status") {
-    return withDatabase(databasePath, (db) => ({
+    return withDatabase(databasePath, (db) => withDatabaseIdentity({
       states: db
         .query("SELECT state, COUNT(*) AS count FROM index_outbox GROUP BY state ORDER BY state")
         .all(),
@@ -250,7 +164,7 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
           value: number | null;
         }
       ).value,
-    }));
+    }, database!));
   }
 
   if (command === "outbox" && subcommand === "retry") {
@@ -262,23 +176,25 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
           `UPDATE index_outbox
               SET state = 'pending', available_at = ?, lease_owner = NULL,
                   lease_expires_at = NULL, heartbeat_at = NULL,
-                  completed_at = NULL, last_error_code = NULL
-            WHERE id = ? AND state = 'dead'`,
+                  completed_at = NULL, last_error_code = NULL, attempt_count = 0
+             WHERE id = ? AND state = 'dead'`,
         )
         .run(Date.now(), id);
-      return { id, retried: result.changes === 1 };
+      pruneTerminalOutbox(db);
+      return withDatabaseIdentity({ id, retried: result.changes === 1 }, database!);
     });
   }
 
   if (command === "capture" && subcommand === "status") {
-    return withDatabase(databasePath, (db) => ({
+    return withDatabase(databasePath, (db) => withDatabaseIdentity({
       events: db
         .query("SELECT state, COUNT(*) AS count FROM capture_events GROUP BY state ORDER BY state")
         .all(),
       checkpoints: db
         .query("SELECT state, COUNT(*) AS count FROM capture_checkpoints GROUP BY state ORDER BY state")
         .all(),
-    }));
+      quarantinePrivacy: quarantinePrivacyReport(db),
+    }, database!));
   }
 
   if (command === "backup" && subcommand === "prune") {
@@ -296,7 +212,7 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
         )
         .digest("hex");
       if (option(argv, "--confirm") !== "DELETE_VERIFIED_BACKUPS") {
-        return { dryRun: true, digest, backups: entries };
+        return withDatabaseIdentity({ dryRun: true, digest, backups: entries }, database!);
       }
       if (option(argv, "--digest") !== digest) throw new Error("backup prune digest mismatch");
       const currentEntries = entries.map((entry) => {
@@ -315,11 +231,65 @@ export async function runAdmin(argv = process.argv.slice(2)): Promise<unknown> {
         rmSync(current.database, { force: true });
         rmSync(current.manifest, { force: true });
       }
-      return { deleted: entries.length, digest };
+      return withDatabaseIdentity({ deleted: entries.length, digest }, database!);
     });
   }
 
   throw new Error(`unknown admin command: ${argv.join(" ")}`);
+}
+
+const TERMINAL_OUTBOX_RETENTION = 10_000;
+
+interface AdminArguments {
+  command: string;
+  subcommand?: string;
+  databaseID?: string;
+}
+
+interface DatabaseIdentity {
+  path: string;
+  databaseID: string;
+}
+
+/** Parse the complete argv before opening the database so malformed input is never a mutation. */
+function parseAdminArguments(argv: string[]): AdminArguments {
+  if (argv.length === 0) throw new Error("admin command is required");
+  const [command, subcommand] = argv;
+  const forms: Record<string, { positional: number; flags: readonly string[] }> = {
+    init: { positional: 0, flags: ["--database-id"] },
+    doctor: { positional: 0, flags: ["--database-id"] },
+    backup: { positional: subcommand === "prune" ? 1 : 0, flags: subcommand === "prune" ? ["--confirm", "--digest", "--database-id"] : ["--database-id"] },
+    upgrade: { positional: 0, flags: ["--to", "--database-id"] },
+    restore: { positional: 1, flags: ["--confirm", "--sha256", "--maintenance-owner", "--maintenance-confirm", "--database-id"] },
+    unlock: { positional: 0, flags: ["--owner", "--confirm", "--database-id"] },
+    reindex: { positional: 0, flags: ["--backend", "--batch-size", "--max-batches", "--database-id"] },
+    outbox: { positional: subcommand === "retry" ? 2 : subcommand === "status" ? 1 : -1, flags: ["--database-id"] },
+    capture: { positional: subcommand === "status" ? 1 : -1, flags: ["--database-id"] },
+  };
+  const form = forms[command];
+  if (!form || form.positional < 0) throw new Error(`unknown admin command: ${argv.join(" ")}`);
+  let positional = command === "restore" ? 2 : subcommand ? 2 : 1;
+  if (command === "backup" && subcommand !== "prune") positional = 1;
+  if (command === "init" || command === "doctor" || command === "upgrade" || command === "unlock" || command === "reindex") positional = 1;
+  if (command === "outbox" && subcommand === "retry") positional = 3;
+  const seen = new Set<string>();
+  for (let index = positional; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!flag?.startsWith("--") || value === undefined || value.startsWith("--")) {
+      throw new Error("admin arguments must use unique --flag value pairs");
+    }
+    if (!form.flags.includes(flag) || seen.has(flag)) throw new Error(`invalid or duplicate admin argument: ${flag}`);
+    seen.add(flag);
+  }
+  // No implicit positional values are accepted after the command/subcommand.
+  if (command === "restore" && (!subcommand || subcommand.startsWith("--"))) {
+    throw new Error("restore manifest path is required");
+  }
+  if ((command === "outbox" || command === "capture") && !subcommand) {
+    throw new Error(`unknown admin command: ${argv.join(" ")}`);
+  }
+  return { command, subcommand, databaseID: option(argv, "--database-id") };
 }
 
 function withDatabase<T>(databasePath: string, action: (db: Database) => T): T {
@@ -355,8 +325,44 @@ function option(argv: string[], name: string): string | undefined {
   return index >= 0 ? argv[index + 1] : undefined;
 }
 
-function requireExistingDatabase(databasePath: string): void {
-  if (!existsSync(databasePath)) throw new Error(`database does not exist: ${databasePath}`);
+function requireExistingDatabase(databasePath: string, expectedID?: string): DatabaseIdentity {
+  if (!existsSync(databasePath)) throw new Error("database does not exist");
+  const stat = lstatSync(databasePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("database must be a regular file");
+  const canonicalPath = realpathSync(databasePath);
+  if (canonicalPath !== resolve(databasePath)) throw new Error("database path must be canonical");
+  const opened = openReadOnlyMemoryDatabase(canonicalPath);
+  try {
+    const identity = databaseIdentity(opened.db, canonicalPath);
+    if (expectedID !== undefined && expectedID !== identity.databaseID) throw new Error("database id mismatch");
+    return identity;
+  } finally {
+    opened.close();
+  }
+}
+
+function databaseIdentity(db: Database, databasePath: string): DatabaseIdentity {
+  const row = db.query("SELECT database_id FROM agz_meta WHERE id = 1").get() as
+    | { database_id: string }
+    | undefined;
+  if (!row?.database_id) throw new Error("database identity is missing");
+  return { path: realpathSync(databasePath), databaseID: row.database_id };
+}
+
+function withDatabaseIdentity<T extends object>(result: T, identity: DatabaseIdentity): T & {
+  databasePath: string;
+  databaseID: string;
+} {
+  return { ...result, databasePath: identity.path, databaseID: identity.databaseID };
+}
+
+function pruneTerminalOutbox(db: Database): void {
+  db.query(
+    `DELETE FROM index_outbox WHERE id IN (
+       SELECT id FROM index_outbox WHERE state IN ('succeeded','dead')
+       ORDER BY completed_at DESC, id DESC LIMIT -1 OFFSET ?
+     )`,
+  ).run(TERMINAL_OUTBOX_RETENTION);
 }
 
 function readSchemaVersion(databasePath: string): number {
@@ -420,26 +426,6 @@ function verifiedBackupEntry(root: string, manifest: string): {
     size: verified.manifest.size,
     manifestHash: createHash("sha256").update(bytes).digest("hex"),
   };
-}
-
-function outboxOperationKey(
-  backend: string,
-  operation: "upsert-note" | "delete-note" | "purge-project",
-  projectID: string,
-  noteID: string | null,
-  revision: number | null,
-  contentHash: string | null,
-  generation: number,
-): string {
-  return hashTuple("outbox-operation", 2, [
-    backend,
-    operation,
-    projectID,
-    noteID,
-    revision,
-    contentHash,
-    generation,
-  ]);
 }
 
 if (import.meta.main) {

@@ -11,33 +11,26 @@ const { PluginRuntime } = await import("../../packages/opencode-plugin/src/runti
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const BINDING_KEY = "b".repeat(64);
 const SESSION_COUNT = 1_000;
-const MAX_RECONCILE_CONCURRENCY = 4;
 
 describe("OpenCode V2 plugin reconciliation backpressure", () => {
   test("AGZ-026 bounds reconciliation work across 1,000 sessions", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agz-memory-plugin-backpressure-"));
-    const firstBatchEntered = deferred<void>();
-    const releaseFirstBatch = deferred<void>();
     const allFinished = deferred<void>();
     let started = 0;
-    let active = 0;
-    let peak = 0;
     let finished = 0;
-    const harness = fakeContext(directory, {}, async () => {
-      started++;
-      active++;
-      peak = Math.max(peak, active);
-      if (started === MAX_RECONCILE_CONCURRENCY) firstBatchEntered.resolve(undefined);
-      await releaseFirstBatch.promise;
-      active--;
-      finished++;
-      if (finished === SESSION_COUNT) allFinished.resolve(undefined);
-      return [];
-    });
+    const harness = fakeContext(directory, {}, []);
     const core = {
       capture: {
         runRetentionBacklog() {},
-        markReconciled() {},
+        checkpoint() {},
+        getCheckpoint(sessionID: string) {
+          started++;
+          return { sessionID, lastMessageID: "checkpoint", state: "active" as const };
+        },
+        markReconciled() {
+          finished++;
+          if (finished === 128) allFinished.resolve(undefined);
+        },
         ingest() {
           return { outcome: "shadowed", idempotencyKey: "" };
         },
@@ -67,15 +60,15 @@ describe("OpenCode V2 plugin reconciliation backpressure", () => {
       for (let index = 0; index < SESSION_COUNT; index++) {
         internal.queueReconcile(`session-${index}`);
       }
-      await firstBatchEntered.promise;
-      releaseFirstBatch.resolve(undefined);
       await allFinished.promise;
 
-      expect(started).toBe(SESSION_COUNT);
-      expect(finished).toBe(SESSION_COUNT);
-      expect(peak).toBeLessThanOrEqual(MAX_RECONCILE_CONCURRENCY);
+      expect(started).toBe(128);
+      expect(finished).toBe(128);
+      expect(harness.contextCallCount()).toBe(0);
+      expect((runtime as unknown as { reconcileOverflowCount: number }).reconcileOverflowCount).toBe(
+        SESSION_COUNT - 128,
+      );
     } finally {
-      releaseFirstBatch.resolve(undefined);
       await runtime.stop();
       rmSync(directory, { recursive: true, force: true });
     }

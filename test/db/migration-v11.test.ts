@@ -58,7 +58,7 @@ describe("schema v11 migration", () => {
             )
             .get(binding.bindingKey, "legacy-checkpoint"),
         ).toEqual({ last_message_id: null });
-        expect(new MemoryStore(opened.db).update(PROJECT_ID, { id: NOTE_ID, kind: "context" }).ok).toBe(true);
+        expect(new MemoryStore(opened.db).update(PROJECT_ID, { operation: "patch", id: NOTE_ID, changes: { kind: "context" } }).ok).toBe(true);
         expect(
           opened.db
             .query("SELECT title, summary, content FROM notes WHERE project_id = ? AND id = ?")

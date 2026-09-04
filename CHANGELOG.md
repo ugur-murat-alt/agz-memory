@@ -3,6 +3,23 @@
 All notable changes to AGZ Memory are recorded here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-09-04
+
+> Candidate metadata only; no npm publication, Git tag, or merge is claimed.
+
+### Changed
+
+- Hardened Phase 1 stabilization with the migration-root fix, shared limits and
+  typed errors, bounded pagination, strict default-off plugin configuration,
+  bounded late attachment/shutdown, and resumable administrative reindexing.
+- Added the 10-sample p95 migration timing artifact, safe clean/evidence
+  tooling, and keyed quarantine HMAC rotation with Windows fail-closed behavior.
+
+### Security
+
+- Preserved exactly nine MCP tools, SQLite schema 11, semantic backend `none`,
+  and inert plugin defaults.
+
 ## [0.5.0] - 2026-09-02
 
 ### Added
