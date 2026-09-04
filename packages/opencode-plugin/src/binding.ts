@@ -113,7 +113,7 @@ function commonGitDirectory(worktreeRoot: string): string | undefined {
 
     const recordedWorktreeGitFile = gitMetadata(join(gitDirectory, "gitdir"));
     if (!recordedWorktreeGitFile) return undefined;
-    if (!pathsEqual(
+    if (!sameFileLocation(
       realpathSync(resolve(gitDirectory, recordedWorktreeGitFile)),
       realpathSync(worktreeGitFile),
     )) {
@@ -160,6 +160,15 @@ function sameDirectory(left: string, right: string): boolean {
     leftStats.ino !== 0 &&
     leftStats.dev === rightStats.dev &&
     leftStats.ino === rightStats.ino
+  );
+}
+
+function sameFileLocation(left: string, right: string): boolean {
+  return (
+    pathsEqual(left, right) ||
+    (process.platform === "win32" &&
+      pathsEqual(basename(left), basename(right)) &&
+      sameDirectory(dirname(left), dirname(right)))
   );
 }
 

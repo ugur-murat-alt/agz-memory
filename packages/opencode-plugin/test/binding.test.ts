@@ -107,7 +107,7 @@ function assertLinkedWorktreeMetadata(mainRoot: string, worktreeRoot: string): v
   assertFixtureStage(
     resolvedWorktreeGitFile !== undefined &&
       expectedWorktreeGitFile !== undefined &&
-      fixturePathsEqual(resolvedWorktreeGitFile, expectedWorktreeGitFile),
+      fixtureSameFileLocation(resolvedWorktreeGitFile, expectedWorktreeGitFile),
     "WORKTREE_BACKLINK",
   );
 }
@@ -167,6 +167,15 @@ function fixtureSameDirectory(left: string, right: string): boolean {
     leftStats.ino !== 0 &&
     leftStats.dev === rightStats.dev &&
     leftStats.ino === rightStats.ino
+  );
+}
+
+function fixtureSameFileLocation(left: string, right: string): boolean {
+  return (
+    fixturePathsEqual(left, right) ||
+    (process.platform === "win32" &&
+      fixturePathsEqual(basename(left), basename(right)) &&
+      fixtureSameDirectory(dirname(left), dirname(right)))
   );
 }
 
