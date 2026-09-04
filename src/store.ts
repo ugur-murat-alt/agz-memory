@@ -8,6 +8,9 @@ import {
 import { INLINE_LIMIT, KINDS, PREDICATES } from "./types";
 import { hashTuple, noteContentHash } from "./hash";
 import { deriveDocument } from "./retrieval/derived";
+import { LIMITS, assertTextLimit } from "./contracts/limits";
+import { decodeCursor, encodeCursor, paginate } from "./contracts/pagination";
+import { assertStrictMutationOperation, type MutationOperation } from "./contracts/mutation";
 import type {
   Edge,
   Kind,
@@ -21,15 +24,6 @@ import type {
 export interface ProjectSelector {
   projectID?: string;
   projectName?: string;
-}
-
-export interface UpdateInput {
-  kind?: string;
-  title?: string;
-  summary?: string;
-  content?: string;
-  id?: string;
-  delete?: boolean;
 }
 
 export interface UpdateResult {
@@ -88,6 +82,23 @@ export class MemoryStore {
       noteCount: row.note_count,
       pinnedCount: row.pinned_count,
     }));
+  }
+
+  listProjectsPage(limit: number, cursor?: string, snapshot?: string) {
+    const projects = this.listProjects();
+    const current = hashTuple(
+      "project-list-snapshot",
+      1,
+      projects.flatMap((project) => [
+        project.projectID,
+        project.projectName,
+        project.createdAt,
+        project.updatedAt,
+        project.noteCount,
+        project.pinnedCount,
+      ]),
+    );
+    return paginate(projects, { projectID: "__projects__", query: "", limit, cursor, snapshot: current, requestedSnapshot: snapshot });
   }
 
   createProject(nameValue: string): {
@@ -150,9 +161,14 @@ export class MemoryStore {
         () =>
           this.db
             .query(
-              "UPDATE projects SET name = ?, normalized_name = ?, updated_at = ? WHERE id = ? RETURNING *",
+              `UPDATE projects
+                  SET name = ?,
+                      normalized_name = ?,
+                      updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END
+                WHERE id = ?
+                RETURNING *`,
             )
-            .get(name, normalizedName, now, projectID) as
+            .get(name, normalizedName, now, now, projectID) as
             ProjectRow | undefined,
       );
       if (!updated)
@@ -248,13 +264,14 @@ export class MemoryStore {
     });
   }
 
-  update(projectID: string, input: UpdateInput): UpdateResult {
+  update(projectID: string, operation: MutationOperation): UpdateResult {
     const project = this.getProjectRow(projectID);
     if (!project)
       return { ok: false, reason: `project ${projectID} not found` };
-    if (input.delete) {
-      if (!input.id) return { ok: false, reason: "id is required for delete" };
-      const id = input.id;
+    assertStrictMutationOperation(operation);
+    if (operation.operation === "delete") {
+      const id = operation.id;
+      assertTextLimit("noteID", id);
       const existing = this.getNoteRow(projectID, id);
       if (!existing)
         return {
@@ -277,6 +294,7 @@ export class MemoryStore {
               };
         }
         const now = Date.now();
+        this.bumpProjectVersion(projectID, now);
         for (const backend of this.indexBackends) {
           this.enqueueOutbox(
             backend,
@@ -298,33 +316,42 @@ export class MemoryStore {
       });
     }
 
-    const existing = input.id
-      ? this.getNoteRow(projectID, input.id)
+    if (operation.operation === "patch") assertTextLimit("noteID", operation.id);
+    const existing = operation.operation === "patch"
+      ? this.getNoteRow(projectID, operation.id)
       : undefined;
-    if (input.id && !existing) {
+    if (operation.operation === "patch" && !existing) {
       return {
         ok: false,
-        reason: `note ${input.id} not found in project ${project.name}`,
+        reason: `note ${operation.id} not found in project ${project.name}`,
       };
     }
     if (existing && existing.status !== "active") {
       return { ok: false, reason: `note is ${existing.status}` };
     }
 
-    const kindValue = input.kind ?? existing?.kind;
+    const changes = operation.operation === "patch" ? operation.changes : undefined;
+    const kindValue = operation.operation === "create" ? operation.kind : changes?.kind ?? existing?.kind;
     const kind = (KINDS as readonly string[]).includes(kindValue ?? "")
       ? (kindValue as Kind)
       : null;
     if (!kind)
       return { ok: false, reason: `kind must be one of: ${KINDS.join(", ")}` };
-    const title = input.title === undefined ? existing?.title ?? "" : input.title.trim();
-    const summary = input.summary === undefined ? existing?.summary ?? "" : input.summary.trim();
-    const content = input.content === undefined ? existing?.content ?? summary : input.content.trim();
+    const title = operation.operation === "create"
+      ? operation.title.trim()
+      : changes?.title === undefined ? existing?.title ?? "" : changes.title.trim();
+    const summary = operation.operation === "create"
+      ? operation.summary.trim()
+      : changes?.summary === undefined ? existing?.summary ?? "" : changes.summary.trim();
+    const content = operation.operation === "create"
+      ? (operation.content ?? summary).trim()
+      : changes?.content === undefined ? existing?.content ?? summary : changes.content.trim();
     if (!title) return { ok: false, reason: "title is required" };
-    if (title.length > 240)
-      return { ok: false, reason: "title exceeds 240 characters" };
     if (!summary) return { ok: false, reason: "summary is required" };
     if (!content) return { ok: false, reason: "content is empty" };
+    assertTextLimit("title", title);
+    assertTextLimit("summary", summary);
+    assertTextLimit("content", content);
 
     const now = Date.now();
     const sizeClass = content.length <= INLINE_LIMIT ? "inline" : "indexed";
@@ -399,6 +426,7 @@ export class MemoryStore {
             existing.current_revision,
           ) as NoteStorageRow | undefined;
         if (!updated) return undefined;
+        this.bumpProjectVersion(projectID, now);
         this.recordCurrentRevision(updated, "mcp-manual", now);
         const derived = deriveDocument({
           projectID: updated.project_id,
@@ -464,6 +492,7 @@ export class MemoryStore {
   }
 
   pin(projectID: string, id: string, pinned: boolean) {
+    assertTextLimit("noteID", id);
     const project = this.getProjectRow(projectID);
     if (!project)
       return { ok: false, reason: `project ${projectID} not found` };
@@ -509,6 +538,7 @@ export class MemoryStore {
         .get(pinned ? 1 : 0, now, projectID, id, note.current_revision) as
         NoteStorageRow | undefined;
       if (!updated) return undefined;
+      this.bumpProjectVersion(projectID, now);
       this.recordCurrentRevision(updated, "mcp-manual", now);
       const derived = deriveDocument({
         projectID: updated.project_id,
@@ -589,6 +619,7 @@ export class MemoryStore {
           now,
         ) as NoteStorageRow | undefined;
       if (!note) throw new Error(`note ${id} insert returned no row`);
+      this.bumpProjectVersion(projectID, now);
       this.recordCurrentRevision(note, "mcp-manual", now);
       const derived = deriveDocument({
         projectID: note.project_id,
@@ -619,21 +650,48 @@ export class MemoryStore {
   read(
     projectID: string,
     id: string,
-  ): { note?: Note; edges?: Edge[]; reason?: string } {
+  ): { note?: Note; edges?: Edge[]; snapshot?: string; etag?: string; nextCursor?: string; reason?: string } {
+    const page = this.readPage(projectID, id, LIMITS.pageSize);
+    if (!("note" in page)) return page;
+    return {
+      note: page.note,
+      edges: page.items,
+      snapshot: page.snapshot,
+      etag: page.etag,
+      nextCursor: page.nextCursor,
+    };
+  }
+
+  readPage(projectID: string, id: string, limit: number, cursor?: string, snapshot?: string) {
+    assertTextLimit("noteID", id);
     const row = this.getNoteRow(projectID, id);
     if (!row) return { reason: `note ${id} not found in project ${projectID}` };
     const edges = this.db
       .query(
         `SELECT e.id, e.project_id, p.name AS project_name, e.source_id, e.target_id, e.predicate, e.created_at
-           FROM note_edges e
-           JOIN projects p ON p.id = e.project_id
-          WHERE e.project_id = ? AND (e.source_id = ? OR e.target_id = ?)`,
+            FROM note_edges e
+            JOIN projects p ON p.id = e.project_id
+           WHERE e.project_id = ? AND (e.source_id = ? OR e.target_id = ?)
+           ORDER BY e.created_at, e.id`,
       )
       .all(projectID, id, id) as Array<EdgeRow>;
+    const resultEdges = edges.map(rowToEdge);
+    const current = hashTuple(
+      "note-edge-snapshot",
+      1,
+      [id, row.updated_at, ...resultEdges.flatMap((edge) => [edge.id, edge.projectID, edge.projectName, edge.sourceID, edge.targetID, edge.predicate, edge.createdAt])],
+    );
     return {
       note: rowToNote(row),
-      edges: edges.map(rowToEdge),
+      ...paginate(resultEdges, { projectID, query: `edges:${id}`, limit, cursor, snapshot: current, requestedSnapshot: snapshot }),
     };
+  }
+
+  listRevisionsPage(projectID: string, noteID: string, limit: number, cursor?: string, snapshot?: string) {
+    assertTextLimit("noteID", noteID);
+    const rows = this.db.query("SELECT revision, created_at FROM note_revisions WHERE project_id = ? AND note_id = ? ORDER BY revision").all(projectID, noteID) as Array<{ revision: number; created_at: number }>;
+    const current = hashTuple("note-revision-snapshot", 1, [noteID, ...rows.flatMap((row) => [row.revision, row.created_at])]);
+    return paginate(rows, { projectID, query: `revisions:${noteID}`, limit, cursor, snapshot: current, requestedSnapshot: snapshot });
   }
 
   link(
@@ -642,6 +700,8 @@ export class MemoryStore {
     targetID: string,
     predicate: string,
   ) {
+    assertTextLimit("noteID", sourceID);
+    assertTextLimit("noteID", targetID);
     const project = this.getProjectRow(projectID);
     if (!project)
       return { ok: false, reason: `project ${projectID} not found` };
@@ -663,46 +723,85 @@ export class MemoryStore {
       if (row.status !== "active")
         return { ok: false, reason: `note ${id} is ${row.status}` };
     }
-    this.db
-      .query(
-        "INSERT OR IGNORE INTO note_edges (id, project_id, source_id, target_id, predicate, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        randomUUID(),
-        projectID,
-        sourceID,
-        targetID,
-        predicate as Predicate,
-        Date.now(),
-      );
+    this.immediateTransaction(() => {
+      const now = Date.now();
+      const inserted = this.db
+        .query(
+          "INSERT OR IGNORE INTO note_edges (id, project_id, source_id, target_id, predicate, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(randomUUID(), projectID, sourceID, targetID, predicate as Predicate, now);
+      if (inserted.changes > 0) this.bumpProjectVersion(projectID, now);
+    });
     return { ok: true, projectID, projectName: project.name };
   }
 
   recall(projectID: string, query: string, limit = 10): RecallCard[] {
+    return this.recallPage(projectID, query, limit).cards;
+  }
+
+  recallPage(projectID: string, query: string, limit: number = LIMITS.pageSize, cursor?: string, snapshot?: string) {
+    assertTextLimit("query", query);
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      return { cards: [], snapshot: hashTuple("recall-snapshot", 1, [projectID, query]), etag: hashTuple("recall-snapshot", 1, [projectID, query]) };
+    }
+    const pageLimit = Math.min(limit, LIMITS.pageSize);
     const tokens = query
       .split(/\s+/)
       .map((token) => token.trim())
       .filter(Boolean)
       .slice(0, 12)
       .map((token) => `"${token.replace(/"/g, '""')}"`);
-    if (tokens.length === 0) return [];
-    const matches = this.db
+    if (tokens.length === 0) {
+      const current = hashTuple("recall-snapshot", 1, [projectID, query]);
+      return { cards: [], snapshot: current, etag: current };
+    }
+    const project = this.getProjectRow(projectID);
+    const current = hashTuple("recall-snapshot", 2, [
+      projectID,
+      query,
+      project?.name ?? "",
+      project?.updated_at ?? 0,
+    ]);
+    if (snapshot !== undefined && snapshot !== current) throw new TypeError("stale_snapshot");
+    const offset = cursor !== undefined
+      ? decodeCursor(cursor, { projectID, query, snapshot: current }).offset
+      : 0;
+    const directCount = (this.db.query(
+      `SELECT COUNT(*) AS count
+         FROM notes_fts
+         JOIN notes n ON n.rowid = notes_fts.rowid
+        WHERE notes_fts MATCH ? AND n.project_id = ? AND n.status = 'active'`,
+    ).get(tokens.join(" OR "), projectID) as { count: number }).count;
+    const matches = offset < directCount ? this.db
       .query(
         `SELECT n.*, p.name AS project_name, bm25(notes_fts) AS rank
            FROM notes_fts
            JOIN notes n ON n.rowid = notes_fts.rowid
            JOIN projects p ON p.id = n.project_id
           WHERE notes_fts MATCH ? AND n.project_id = ? AND n.status = 'active'
-          ORDER BY n.pinned DESC, rank
-          LIMIT ?`,
+           ORDER BY n.pinned DESC, rank, n.id
+            LIMIT ? OFFSET ?`,
       )
-      .all(tokens.join(" OR "), projectID, limit) as Array<
+      .all(tokens.join(" OR "), projectID, pageLimit, offset) as Array<
       NoteRow & { rank: number }
-    >;
+    > : [];
 
     const cards = matches.map((row) => toCard(rowToNote(row), "match"));
-    const seen = new Set(cards.map((card) => card.id));
-    for (const match of matches.slice(0, 5)) {
+    const directRemaining = Math.max(0, directCount - offset);
+    const neighborOffset = Math.max(0, offset - directCount);
+    if (cards.length < pageLimit && directRemaining <= cards.length) {
+      const firstMatches = this.db.query(
+        `SELECT n.*, p.name AS project_name, bm25(notes_fts) AS rank
+           FROM notes_fts
+           JOIN notes n ON n.rowid = notes_fts.rowid
+           JOIN projects p ON p.id = n.project_id
+          WHERE notes_fts MATCH ? AND n.project_id = ? AND n.status = 'active'
+          ORDER BY n.pinned DESC, rank, n.id
+          LIMIT 5`,
+      ).all(tokens.join(" OR "), projectID) as Array<NoteRow & { rank: number }>;
+      const neighborsToAppend: RecallCard[] = [];
+      const seen = new Set<string>();
+      for (const match of firstMatches) {
       const neighbors = this.db
         .query(
           `SELECT e.predicate, n.*, p.name AS project_name
@@ -713,7 +812,7 @@ export class MemoryStore {
               AND (e.source_id = ? OR e.target_id = ?)
               AND n.project_id = ?
               AND n.status = 'active'
-            ORDER BY n.pinned DESC
+             ORDER BY n.pinned DESC, n.updated_at DESC, n.id
             LIMIT 6`,
         )
         .all(match.id, projectID, match.id, match.id, projectID) as Array<
@@ -721,18 +820,49 @@ export class MemoryStore {
       >;
       for (const neighbor of neighbors) {
         if (seen.has(neighbor.id)) continue;
+        const isDirectMatch = this.db.query(
+          `SELECT 1
+             FROM notes_fts
+             JOIN notes n ON n.rowid = notes_fts.rowid
+            WHERE notes_fts MATCH ? AND n.project_id = ? AND n.id = ? AND n.status = 'active'`,
+        ).get(tokens.join(" OR "), projectID, neighbor.id);
+        if (isDirectMatch) continue;
         seen.add(neighbor.id);
         const card = toCard(rowToNote(neighbor), "neighbor");
         card.predicates = [neighbor.predicate];
-        cards.push(card);
+        neighborsToAppend.push(card);
       }
     }
-    return cards.slice(0, limit + 5);
+      cards.push(...neighborsToAppend.slice(neighborOffset, neighborOffset + (pageLimit - cards.length)));
+      const consumedNeighbors = neighborOffset + Math.max(0, cards.length - matches.length);
+      const hasMore = offset + matches.length < directCount || consumedNeighbors < neighborsToAppend.length;
+      return {
+        cards,
+        snapshot: current,
+        etag: current,
+        ...(hasMore ? { nextCursor: encodeCursor({ projectID, query, snapshot: current, offset: offset + cards.length }) } : {}),
+      };
+    }
+    const hasMore = offset + cards.length < directCount;
+    return {
+      cards,
+      snapshot: current,
+      etag: current,
+      ...(hasMore ? { nextCursor: encodeCursor({ projectID, query, snapshot: current, offset: offset + cards.length }) } : {}),
+    };
   }
 
   private getProjectRow(id: string): ProjectRow | undefined {
     return this.db.query("SELECT * FROM projects WHERE id = ?").get(id) as
       ProjectRow | undefined;
+  }
+
+  private bumpProjectVersion(projectID: string, now: number): void {
+    this.db.query(
+      `UPDATE projects
+          SET updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END
+        WHERE id = ?`,
+    ).run(now, now, projectID);
   }
 
   private getProjectByNormalizedName(

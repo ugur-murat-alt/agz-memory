@@ -12,8 +12,10 @@ import {
   normalizeSubjectKey,
 } from "../capture/policy";
 import { REDACTION_POLICY_VERSION, redactText } from "../capture/redact";
+import { resolveConfig } from "../config";
 import { hashTuple, noteContentHash } from "../hash";
 import { deriveDocument } from "../retrieval/derived";
+import { QuarantineKeyring } from "../security/quarantine-key";
 
 export interface ProjectBindingInput {
   memoryProjectID: string;
@@ -41,10 +43,21 @@ export interface CaptureIngestResult {
 }
 
 export class CaptureStore {
+  private readonly quarantineKeyring: QuarantineKeyring;
+
   constructor(
     private db: Database,
     private indexBackends: readonly string[] = [],
-  ) {}
+    options: { quarantineKeyring?: QuarantineKeyring } = {},
+  ) {
+    this.quarantineKeyring =
+      options.quarantineKeyring ?? new QuarantineKeyring(resolveConfig().quarantineKeyringPath);
+    try {
+      this.quarantineKeyring.ensureActiveKey();
+    } catch {
+      // Capture remains available only to record a content-free unavailable-key quarantine.
+    }
+  }
 
   bindProject(input: ProjectBindingInput): {
     ok: true;
@@ -343,7 +356,7 @@ export class CaptureStore {
     }
     if (!this.binding(parsed.bindingKey, parsed.projectID))
       throw new Error("binding_conflict");
-    const prepared = prepareForPersistence(parsed, options.denylist);
+    const prepared = prepareForPersistence(parsed, options.denylist, this.quarantineKeyring);
     const now = Date.now();
     let result: CaptureIngestResult = {
       outcome: prepared.quarantined ? "quarantined" : "shadowed",
@@ -373,9 +386,9 @@ export class CaptureStore {
           prepared.event.source.messageID ?? null,
           prepared.event.source.ordinal ?? null,
           prepared.event.source.toolCallID ?? null,
-          prepared.payload,
-          prepared.payloadHash,
-          REDACTION_POLICY_VERSION,
+           prepared.payload,
+           prepared.payloadHash,
+           prepared.redactionVersion,
           prepared.quarantined ? "quarantined" : "pending",
           now,
           now,
@@ -397,6 +410,9 @@ export class CaptureStore {
             prepared.event,
             prepared.payload,
             prepared.payloadHash,
+            prepared.redactionVersion,
+            prepared.payloadFingerprint,
+            this.quarantineKeyring,
           )
         ) {
           throw new Error("idempotency_conflict");
@@ -702,6 +718,11 @@ export class CaptureStore {
         now,
         now,
       );
+    this.db.query(
+      `UPDATE projects
+          SET updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END
+        WHERE id = ?`,
+    ).run(now, now, event.projectID);
     this.recordRevision(event, id, now);
     return id;
   }
@@ -899,6 +920,7 @@ export class CaptureStore {
 function prepareForPersistence(
   event: CaptureEventV1,
   denylist?: readonly string[],
+  quarantineKeyring?: QuarantineKeyring,
 ) {
   const copy = structuredClone(event);
   let replacements = 0;
@@ -943,11 +965,31 @@ function prepareForPersistence(
     truncated,
   };
   const validated = parseCaptureEvent(copy);
+  const payloadFingerprint = capturePayloadHash(validated);
+  let payloadHash: string | null = payloadFingerprint;
+  let redactionVersion = REDACTION_POLICY_VERSION;
+  if (quarantined) {
+    let keyID = "unavailable";
+    payloadHash = null;
+    try {
+      const keyed = quarantineKeyring?.digestExistingSource(validated, payloadFingerprint);
+      if (keyed) {
+        keyID = keyed.keyID;
+        payloadHash = keyed.digest;
+      }
+    } catch {
+      // A missing, replaced, or insecure keyring must never downgrade quarantine
+      // into raw persistence or surface secret-bearing data through an error path.
+    }
+    redactionVersion = quarantineRedactionVersion(keyID);
+  }
   const payload = quarantined ? null : JSON.stringify(validated);
   return {
     event: validated,
     payload,
-    payloadHash: capturePayloadHash(validated),
+    payloadHash,
+    redactionVersion,
+    payloadFingerprint,
     quarantined,
     additionalReplacements: replacements,
   };
@@ -1056,8 +1098,14 @@ function samePersistedCapture(
   event: CaptureEventV1,
   payload: string | null,
   payloadHash: string | null,
+  redactionVersion: string,
+  payloadFingerprint: string,
+  quarantineKeyring: QuarantineKeyring,
 ): boolean {
-  const retainedLegacyPayload = existing.payload_json === null && existing.payload_hash === null;
+  const retainedLegacyPayload =
+    existing.payload_json === null &&
+    existing.payload_hash === null &&
+    !isQuarantineRedactionVersion(existing.redaction_version);
   return (
     existing.contract === event.schema &&
     existing.project_id === event.projectID &&
@@ -1069,8 +1117,68 @@ function samePersistedCapture(
     existing.source_tool_call_id === (event.source.toolCallID ?? null) &&
     (retainedLegacyPayload ||
       (sameCapturePayload(existing.payload_json, existing.payload_hash, payload, payloadHash) &&
-        existing.redaction_version === REDACTION_POLICY_VERSION))
+        existing.redaction_version === redactionVersion) ||
+      sameKeyedQuarantinedCapture(
+        existing,
+        event,
+        payload,
+        payloadHash,
+        redactionVersion,
+        payloadFingerprint,
+        quarantineKeyring,
+      ))
   );
+}
+
+function sameKeyedQuarantinedCapture(
+  existing: CaptureRow,
+  event: CaptureEventV1,
+  payload: string | null,
+  payloadHash: string | null,
+  redactionVersion: string,
+  payloadFingerprint: string,
+  quarantineKeyring: QuarantineKeyring,
+): boolean {
+  if (
+    payload !== null ||
+    existing.payload_json !== null ||
+    payloadHash === null ||
+    existing.payload_hash === null ||
+    !isCurrentKeyedQuarantineVersion(existing.redaction_version) ||
+    !isCurrentKeyedQuarantineVersion(redactionVersion)
+  ) {
+    return false;
+  }
+  const keyID = quarantineKeyID(existing.redaction_version);
+  if (!keyID) return false;
+  try {
+    return quarantineKeyring.verifySourceDigest(
+      event,
+      payloadFingerprint,
+      keyID,
+      existing.payload_hash,
+    );
+  } catch {
+    // Without a readable keyring, retries conflict rather than accepting an
+    // unverifiable event. This intentionally limits idempotent retry availability.
+    return false;
+  }
+}
+
+function quarantineRedactionVersion(keyID: string): string {
+  return `${REDACTION_POLICY_VERSION};quarantine-key=${keyID};quarantine-digest=2`;
+}
+
+function isQuarantineRedactionVersion(value: string): boolean {
+  return /^redaction\/1;quarantine-key=(?:[0-9a-f]{24}|unavailable)(?:;quarantine-digest=2)?$/.test(value);
+}
+
+function isCurrentKeyedQuarantineVersion(value: string): boolean {
+  return /^redaction\/1;quarantine-key=[0-9a-f]{24};quarantine-digest=2$/.test(value);
+}
+
+function quarantineKeyID(value: string): string | undefined {
+  return /^redaction\/1;quarantine-key=([0-9a-f]{24});quarantine-digest=2$/.exec(value)?.[1];
 }
 
 function sameCapturePayload(

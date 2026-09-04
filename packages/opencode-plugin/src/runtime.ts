@@ -28,6 +28,10 @@ interface TurnState {
 }
 
 const MAX_RECONCILE_CONCURRENCY = 4;
+// Terminal events are lossy notifications: retain one reconciliation per session,
+// rather than allowing a busy server to retain an unbounded session-ID backlog.
+const MAX_RECONCILE_QUEUE = 128;
+const STOP_DEADLINE_MS = 100;
 
 export class PluginRuntime {
   private abort = new AbortController();
@@ -43,8 +47,10 @@ export class PluginRuntime {
   private reconcileTasks = new Set<Promise<void>>();
   private reconcileActive = 0;
   private reconcileDispatchScheduled = false;
+  private reconcileOverflowCount = 0;
   private eventLoop?: Promise<void>;
   private retentionTimer?: ReturnType<typeof setInterval>;
+  private stopTask?: Promise<void>;
 
   constructor(
     private ctx: Plugin.Context,
@@ -124,7 +130,7 @@ export class PluginRuntime {
               this.binding.projectID,
             );
           } catch (error) {
-            this.log("prompt", error);
+            if (!this.abort.signal.aborted) this.log("prompt", error);
           }
         }),
       );
@@ -173,7 +179,7 @@ export class PluginRuntime {
             if (context && Date.now() <= deadlineAt) input.system.push({ type: "text", text: context });
           } catch (error) {
             if (input.system.length !== originalLength) input.system.splice(originalLength);
-            this.log("context", error);
+            if (!this.abort.signal.aborted) this.log("context", error);
           }
         }),
       );
@@ -219,7 +225,7 @@ export class PluginRuntime {
             };
             this.core.capture.ingest(event, this.captureMode, this.capturePolicy);
           } catch (error) {
-            this.log("tool", error);
+            if (!this.abort.signal.aborted) this.log("tool", error);
           }
         }),
       );
@@ -236,17 +242,48 @@ export class PluginRuntime {
   }
 
   async stop(): Promise<void> {
+    if (this.stopTask) return this.stopTask;
+    this.stopTask = this.stopImpl();
+    return this.stopTask;
+  }
+
+  private async stopImpl(): Promise<void> {
+    // Abort is the late-result fence. Every async write path checks it again after
+    // awaiting OpenCode, so the owner may close the core when this method returns.
     this.abort.abort();
     if (this.retentionTimer) clearInterval(this.retentionTimer);
     this.retentionTimer = undefined;
-    await Promise.allSettled(this.registrations.splice(0).map((registration) => registration.dispose()));
+    const deadlineAt = Date.now() + STOP_DEADLINE_MS;
+    const registrations = this.registrations.splice(0);
+    // Each stage has the remaining budget from one shared deadline. This lets the
+    // normal abort-aware path drain before the core owner closes its database, but
+    // a misbehaving third-party registration cannot extend shutdown indefinitely.
+    await settleBefore(
+      deadlineAt,
+      Promise.allSettled(
+        registrations.map((registration) => Promise.resolve().then(() => registration.dispose())),
+      ),
+    );
+    await settleBefore(deadlineAt, this.eventLoop);
+    this.reconcilePending.clear();
+    this.reconcileAgain.clear();
+    this.reconcileQueue.clear();
+    await settleBefore(deadlineAt, Promise.allSettled([...this.reconcileTasks]));
     this.promptCache.clear();
     this.turnStates.clear();
     this.promptGenerations.clear();
     this.optOutProbes.clear();
-    this.reconcilePending.clear();
-    this.reconcileAgain.clear();
-    this.reconcileQueue.clear();
+    if (this.reconcileOverflowCount > 0) {
+      process.stderr.write(
+        `${JSON.stringify({
+          component: "agz-memory-plugin",
+          operation: "reconcile_queue",
+          outcome: "dropped",
+          reason: "capacity",
+          count: this.reconcileOverflowCount,
+        })}\n`,
+      );
+    }
   }
 
   private async runEventLoop(): Promise<void> {
@@ -291,6 +328,17 @@ export class PluginRuntime {
     if (locationMatch === false) return;
     if (!(await this.matchesBinding(event.data.sessionID))) return;
     if (this.abort.signal.aborted) return;
+    if (
+      event.type === "session.execution.succeeded" ||
+      event.type === "session.execution.failed" ||
+      event.type === "session.execution.interrupted" ||
+      event.type === "session.idle" ||
+      event.type === "session.tool.success" ||
+      event.type === "session.tool.failed"
+    ) {
+      this.queueReconcile(event.data.sessionID);
+      return;
+    }
     if (await this.turnOptedOut(event.data.sessionID, eventAssistantMessageID(event))) return;
     if (this.abort.signal.aborted) return;
     if (event.type === "session.text.ended" && this.captureEnabled) {
@@ -315,22 +363,16 @@ export class PluginRuntime {
       }
       return;
     }
-    if (
-      event.type === "session.execution.succeeded" ||
-      event.type === "session.execution.failed" ||
-      event.type === "session.execution.interrupted" ||
-      event.type === "session.idle" ||
-      event.type === "session.tool.success" ||
-      event.type === "session.tool.failed"
-    ) {
-      this.queueReconcile(event.data.sessionID);
-    }
   }
 
   private queueReconcile(sessionID: string): void {
     if (this.abort.signal.aborted) return;
     if (this.reconcileQueue.has(sessionID)) {
       this.reconcileAgain.add(sessionID);
+      return;
+    }
+    if (this.reconcileQueue.size >= MAX_RECONCILE_QUEUE) {
+      this.reconcileOverflowCount++;
       return;
     }
     this.reconcileQueue.add(sessionID);
@@ -356,7 +398,7 @@ export class PluginRuntime {
       if (sessionID === undefined) return;
       this.reconcilePending.delete(sessionID);
       this.reconcileActive++;
-      const task = this.runReconcile(sessionID).finally(() => {
+      const task = Promise.resolve(this.reconcile(sessionID)).finally(() => {
         this.reconcileActive--;
         this.reconcileQueue.delete(sessionID);
         this.reconcileTasks.delete(task);
@@ -371,98 +413,44 @@ export class PluginRuntime {
     }
   }
 
-  private async runReconcile(sessionID: string): Promise<void> {
-    do {
-      this.reconcileAgain.delete(sessionID);
-      await this.reconcile(sessionID);
-    } while (!this.abort.signal.aborted && this.reconcileAgain.delete(sessionID));
-  }
-
   private async reconcile(sessionID: string): Promise<void> {
     if (this.abort.signal.aborted || !this.captureEnabled) return;
     try {
-      const checkpoint = this.core.capture.getCheckpoint?.(
+      const bindingMatches = await withTimeout(
+        (signal) => sessionMatchesBinding(this.ctx, sessionID, this.binding, signal),
+        this.options.retrieval.timeoutMs,
+        this.abort.signal,
+      );
+      if (!bindingMatches || this.abort.signal.aborted) return;
+      let checkpoint = this.core.capture.getCheckpoint?.(
         sessionID,
         this.binding.bindingKey,
         this.binding.projectID,
       );
-      const messages = await withTimeout(
-        async (signal) => {
-          if (!(await sessionMatchesBinding(this.ctx, sessionID, this.binding, signal))) {
-            return undefined;
-          }
-          return this.ctx.session.context({ sessionID }, { signal });
-        },
-        this.options.retrieval.timeoutMs,
-        this.abort.signal,
-      );
-      if (!messages) return;
-      if (this.abort.signal.aborted) return;
-      const checkpointIndex =
-        checkpoint?.lastMessageID === undefined
-          ? -1
-          : messages.findIndex(
-              (message) =>
-                Boolean(message && typeof message === "object" && "id" in message) &&
-                String((message as { id: unknown }).id) === checkpoint.lastMessageID,
-            );
-      const firstMessageIndex = checkpointIndex < 0 ? 0 : checkpointIndex + 1;
-      let lastMessageID: string | undefined;
-      let skipAssistantTurn =
-        checkpointIndex < 0
-          ? false
-          : /\[memory:off\]/i.test(latestUserText(messages.slice(0, firstMessageIndex)) ?? "");
-      for (let index = 0; index < messages.length; index++) {
-        const message = messages[index];
-        if (!message || typeof message !== "object" || !("id" in message)) continue;
-        lastMessageID = String(message.id);
-        if (index < firstMessageIndex) continue;
-        if (message.type === "user") {
-          skipAssistantTurn = /\[memory:off\]/i.test(message.text);
-          if (skipAssistantTurn) continue;
-          const safe = safeUserCandidate(message.text);
-          if (safe.candidate) {
-            this.ingestCandidate(
-              "user-candidate",
-              sessionID,
-              String(message.id),
-              safe.candidate,
-              safe.redaction,
-            );
-          }
-        }
-        if (message.type === "assistant") {
-          if (skipAssistantTurn) continue;
-          for (let ordinal = 0; ordinal < message.content.length; ordinal++) {
-            const part = message.content[ordinal]!;
-            if (part.type !== "text") continue;
-            const safe = safeAssistantCandidate([part]);
-            if (!safe.candidate) continue;
-            const key = captureIdempotencyKey({
-              kind: "assistant",
-              bindingKey: this.binding.bindingKey,
-              sessionID,
-              assistantMessageID: String(message.id),
-              ordinal,
-            });
-            this.ingestCandidate(
-              "assistant-candidate",
-              sessionID,
-              String(message.id),
-              safe.candidate,
-              safe.redaction,
-              ordinal,
-              key,
-            );
-          }
-        }
+      // A runtime can attach after prompts have already happened. Persist only after
+      // the session's project/location binding has been independently verified.
+      if (!checkpoint) {
+        this.core.capture.checkpoint(sessionID, this.binding.bindingKey, this.binding.projectID);
+        // The current OpenCode context API has no cursor or limit. A late attach
+        // without a persisted cursor must not fetch an unbounded transcript.
+        this.core.capture.markReconciled(
+          sessionID,
+          "unavailable",
+          undefined,
+          true,
+          this.binding.bindingKey,
+          this.binding.projectID,
+        );
+        return;
       }
-      if (this.abort.signal.aborted) return;
+      // The installed OpenCode API only accepts sessionID for context() and
+      // therefore cannot fetch a bounded suffix. Never transfer an unbounded
+      // transcript merely to reconcile a checkpoint.
       this.core.capture.markReconciled(
         sessionID,
-        "active",
-        lastMessageID,
-        false,
+        "unavailable",
+        checkpoint.lastMessageID,
+        true,
         this.binding.bindingKey,
         this.binding.projectID,
       );
@@ -479,7 +467,7 @@ export class PluginRuntime {
           );
         }
       } catch {}
-      this.log("reconcile", error);
+      if (!this.abort.signal.aborted) this.log("reconcile", error);
     }
   }
 
@@ -739,15 +727,35 @@ function safeErrorCode(value: string): string {
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, milliseconds);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const onAbort = () => finish();
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function settleBefore(deadlineAt: number, promise: Promise<unknown> | undefined): Promise<void> {
+  if (!promise) return Promise.resolve();
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, remaining);
+    timer.unref();
+    promise.then(finish, finish);
   });
 }
 

@@ -5,7 +5,7 @@ const CORE_PACKAGE = "@vaur94/agz-memory";
 const PLUGIN_PACKAGE = "@vaur94/agz-memory-plugin";
 const RETIRED_NAME = ["opencode", "2", "-memory"].join("");
 const RETIRED_VERSION = ["0.4.0", "beta.1"].join("-");
-const PREVIOUS_VERSION = ["0.4", ".2"].join("");
+const PREVIOUS_VERSION = "0.5.0";
 const SINGLE_FILE_REVIEW_EVIDENCE = new Set(["061", "062", "063", "065"]);
 const SKILL_FRONTMATTER = `---
 name: AGZ Memory
@@ -88,7 +88,7 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
     if (
       path !== "CHANGELOG.md" &&
       !path.startsWith("artifacts/baseline/") &&
-      content.includes(PREVIOUS_VERSION)
+      containsPreviousActivePackagePin(content)
     ) {
       errors.push(`${path}: contains previous active package version`);
     }
@@ -108,7 +108,7 @@ export function validateReleaseFiles(files: ReadonlyMap<string, string>): string
   if (version && dependency !== version) {
     errors.push(`plugin dependency on ${CORE_PACKAGE} must equal ${version}`);
   }
-  if (version && version !== "0.5.0") errors.push(`final package version must be 0.5.0, found ${version}`);
+  if (version && version !== "0.5.1") errors.push(`candidate package version must be 0.5.1, found ${version}`);
 
   if (version) {
     requireText(files, "src/version.ts", `PRODUCT_VERSION = "${version}"`, errors);
@@ -171,10 +171,22 @@ function normalizeText(content: string): string {
   return content.replace(/\r\n?/g, "\n");
 }
 
+function containsPreviousActivePackagePin(content: string): boolean {
+  return (
+    content.includes(`${CORE_PACKAGE}@${PREVIOUS_VERSION}`) ||
+    content.includes(`${PLUGIN_PACKAGE}@${PREVIOUS_VERSION}`) ||
+    content.includes(`agz-memory/v${PREVIOUS_VERSION}/`) ||
+    content.includes(`agz-memory-${PREVIOUS_VERSION}.tgz`)
+  );
+}
+
 function validateCI(files: ReadonlyMap<string, string>, errors: string[]): void {
   const path = ".github/workflows/ci.yml";
   const content = files.get(path) ?? "";
   const required = [
+    "concurrency:",
+    "group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}",
+    "cancel-in-progress: true",
     "os: ubuntu-latest",
     "os: macos-latest",
     "os: windows-latest",
@@ -184,6 +196,27 @@ function validateCI(files: ReadonlyMap<string, string>, errors: string[]): void 
     "bun run test:stress",
     "bun run test:restore",
     "bun run benchmark:gate",
+    "bun scripts/run-tests.ts",
+    "--coverage",
+    "--coverage-reporter=lcov",
+    "--coverage-dir \"$EVIDENCE_DIR/coverage\"",
+    "--reporter=junit",
+    "--reporter-outfile \"$EVIDENCE_DIR/junit.xml\"",
+    "bun scripts/run-migration-timing.ts",
+    "--iterations 10",
+    "--json \"$EVIDENCE_DIR/migration-timing.json\"",
+    "--assert-p95",
+    "if: always() && matrix.bun == '1.3.14'",
+    "bun scripts/collect-test-evidence.ts --output \"$RUNNER_TEMP/agz-memory-evidence/manifest.json\"",
+    "EVIDENCE_SHA: ${{ github.sha }}",
+    "TEST_SUITE_STATUS: ${{ steps.compatibility-tests.outcome }}",
+    "MIGRATION_TIMING_STATUS: ${{ steps.migration-timing.outcome }}",
+    "if: always()",
+    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "compatibility-evidence-${{ matrix.os }}-${{ matrix.bun }}",
+    "path: ${{ runner.temp }}/agz-memory-evidence",
+    "if-no-files-found: warn",
+    "retention-days: 14",
     "github/codeql-action/init@",
     "github/codeql-action/analyze@",
     "actions/dependency-review-action@",
@@ -194,9 +227,22 @@ function validateCI(files: ReadonlyMap<string, string>, errors: string[]): void 
     "r.health?.schemaVersion!==11",
   ];
   for (const expected of required) requireText(files, path, expected, errors);
-  for (const line of content.split("\n").filter((value) => /^\s*- uses:/.test(value))) {
+  for (const line of content.split("\n").filter((value) => /^\s*(?:-\s*)?uses:/.test(value))) {
     if (!/@[0-9a-f]{40}(?:\s|$)/.test(line.replace(/\s+#.*$/, ""))) {
       errors.push(`${path}: action must use a full commit SHA: ${line.trim()}`);
+    }
+  }
+  const lines = content.split("\n");
+  const uploadIndex = lines.findIndex((line) =>
+    /^\s*(?:-\s*)?uses: actions\/upload-artifact@/.test(line),
+  );
+  if (uploadIndex >= 0) {
+    let stepStart = uploadIndex - 1;
+    while (stepStart > 0 && !/^\s*- (?:name|uses|run):/.test(lines[stepStart]!)) stepStart -= 1;
+    let stepEnd = uploadIndex + 1;
+    while (stepEnd < lines.length && !/^\s*- (?:name|uses|run):/.test(lines[stepEnd]!)) stepEnd += 1;
+    if (!lines.slice(stepStart, stepEnd).some((line) => /^\s*if:\s*always\(\)\s*$/.test(line))) {
+      errors.push(`${path}: compatibility evidence upload must run with if: always()`);
     }
   }
 }

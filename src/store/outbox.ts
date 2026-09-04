@@ -10,6 +10,13 @@ import { deriveDocument } from "../retrieval/derived";
 const LEASE_DURATION_MS = 30_000;
 const BACKEND_TIMEOUT_MS = 5_000;
 const HEARTBEAT_INTERVAL_MS = 10_000;
+const TERMINAL_OUTBOX_RETENTION = 10_000;
+const TERMINAL_OUTBOX_PRUNE_INTERVAL = 100;
+
+interface OutboxRetentionOptions {
+  terminalRetention?: number;
+  terminalPruneInterval?: number;
+}
 
 export type OutboxOutcome =
   | "idle"
@@ -22,13 +29,25 @@ export type OutboxOutcome =
 
 export class OutboxWorker {
   private readonly workerID = randomUUID();
+  private readonly terminalRetention: number;
+  private readonly terminalPruneInterval: number;
+  private terminalTransitions: number;
 
   constructor(
     private db: Database,
     private backends: ReadonlyMap<string, OutboxBackend>,
     private now: () => number = Date.now,
     private random: () => number = Math.random,
+    retention: OutboxRetentionOptions = {},
   ) {
+    this.terminalRetention = retention.terminalRetention ?? TERMINAL_OUTBOX_RETENTION;
+    this.terminalPruneInterval = retention.terminalPruneInterval ?? TERMINAL_OUTBOX_PRUNE_INTERVAL;
+    if (!Number.isSafeInteger(this.terminalRetention) || this.terminalRetention < 1)
+      throw new Error("outbox_terminal_retention_invalid");
+    if (!Number.isSafeInteger(this.terminalPruneInterval) || this.terminalPruneInterval < 1)
+      throw new Error("outbox_terminal_prune_interval_invalid");
+    // A newly started worker must trim any accumulated terminal backlog immediately.
+    this.terminalTransitions = this.terminalPruneInterval - 1;
     for (const backend of backends.values()) {
       if (backend.outboxProtocol !== "agz-memory-outbox/1") {
         throw new Error("outbox_backend_fencing_required");
@@ -171,42 +190,64 @@ export class OutboxWorker {
   }
 
   private succeed(row: OutboxRow): "succeeded" | "lost_lease" {
-    const result = this.db
-      .query(`
-        UPDATE index_outbox
-           SET state = 'succeeded', completed_at = ?, lease_owner = NULL,
-               lease_expires_at = NULL, heartbeat_at = NULL, last_error_code = NULL
-         WHERE id = ? AND state = 'leased' AND lease_owner = ?
-           AND lease_generation = ? AND fence = ?
-      `)
-      .run(this.now(), row.id, this.workerID, row.lease_generation, row.fence);
-    return result.changes === 1 ? "succeeded" : "lost_lease";
+    let changed = false;
+    this.db.transaction(() => {
+      const result = this.db
+        .query(`
+          UPDATE index_outbox
+             SET state = 'succeeded', completed_at = ?, lease_owner = NULL,
+                 lease_expires_at = NULL, heartbeat_at = NULL, last_error_code = NULL
+            WHERE id = ? AND state = 'leased' AND lease_owner = ?
+              AND lease_generation = ? AND fence = ?
+        `)
+        .run(this.now(), row.id, this.workerID, row.lease_generation, row.fence);
+      changed = result.changes === 1;
+      if (changed) this.pruneTerminalOutbox();
+    })();
+    return changed ? "succeeded" : "lost_lease";
   }
 
   private fail(row: OutboxRow, errorCode: string): "retry" | "dead" | "lost_lease" {
     const dead = row.attempt_count >= 10;
     const availableAt = this.now() + retryDelay(row.attempt_count, this.random());
-    const result = this.db
-      .query(`
-        UPDATE index_outbox
-           SET state = ?, available_at = ?, lease_owner = NULL,
-               lease_expires_at = NULL, heartbeat_at = NULL,
-               last_error_code = ?, completed_at = ?
-         WHERE id = ? AND state = 'leased' AND lease_owner = ?
-           AND lease_generation = ? AND fence = ?
-      `)
-      .run(
-        dead ? "dead" : "pending",
-        availableAt,
-        errorCode,
-        dead ? this.now() : null,
-        row.id,
-        this.workerID,
-        row.lease_generation,
-        row.fence,
-      );
-    if (result.changes !== 1) return "lost_lease";
+    let changed = false;
+    this.db.transaction(() => {
+      const result = this.db
+        .query(`
+          UPDATE index_outbox
+             SET state = ?, available_at = ?, lease_owner = NULL,
+                 lease_expires_at = NULL, heartbeat_at = NULL,
+                 last_error_code = ?, completed_at = ?
+            WHERE id = ? AND state = 'leased' AND lease_owner = ?
+              AND lease_generation = ? AND fence = ?
+        `)
+        .run(
+          dead ? "dead" : "pending",
+          availableAt,
+          errorCode,
+          dead ? this.now() : null,
+          row.id,
+          this.workerID,
+          row.lease_generation,
+          row.fence,
+        );
+      changed = result.changes === 1;
+      if (changed && dead) this.pruneTerminalOutbox();
+    })();
+    if (!changed) return "lost_lease";
     return dead ? "dead" : "retry";
+  }
+
+  private pruneTerminalOutbox(): void {
+    this.terminalTransitions++;
+    if (this.terminalTransitions < this.terminalPruneInterval) return;
+    this.terminalTransitions = 0;
+    this.db.query(
+      `DELETE FROM index_outbox WHERE id IN (
+         SELECT id FROM index_outbox WHERE state IN ('succeeded', 'dead')
+         ORDER BY completed_at DESC, id DESC LIMIT -1 OFFSET ?
+       )`,
+    ).run(this.terminalRetention);
   }
 }
 

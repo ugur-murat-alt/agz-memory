@@ -13,15 +13,16 @@ describe("note lifecycle", () => {
     const store = new MemoryStore(opened.db, ["fake@1"]);
     const projectID = store.createProject("Lifecycle").project!.projectID;
     const noteID = store.update(projectID, {
+      operation: "create",
       kind: "fact",
       title: "one",
       summary: "one",
       content: "one",
     }).id!;
     expect(revisions(opened.db, noteID)).toBe(1);
-    store.update(projectID, { id: noteID, title: "one" });
+    store.update(projectID, { operation: "patch", id: noteID, changes: { title: "one" } });
     expect(revisions(opened.db, noteID)).toBe(1);
-    store.update(projectID, { id: noteID, title: "two" });
+    store.update(projectID, { operation: "patch", id: noteID, changes: { title: "two" } });
     expect(revisions(opened.db, noteID)).toBe(2);
     store.pin(projectID, noteID, true);
     store.pin(projectID, noteID, true);
@@ -37,7 +38,7 @@ describe("note lifecycle", () => {
       (opened.db.query("SELECT COUNT(*) AS count FROM index_outbox").get() as { count: number }).count,
     ).toBe(3);
 
-    store.update(projectID, { id: noteID, delete: true });
+    store.update(projectID, { operation: "delete", id: noteID });
     expect(revisions(opened.db, noteID)).toBe(0);
     expect(
       (

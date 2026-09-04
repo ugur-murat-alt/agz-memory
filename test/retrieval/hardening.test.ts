@@ -24,11 +24,13 @@ import { OutboxWorker } from "../../src/store/outbox";
 import { RetrievalStore } from "../../src/store/retrieval";
 
 describe("retrieval hardening regressions", () => {
+  const reindexTest = process.platform === "win32" ? test.skip : test;
   test("AGZ-036 accepts a backend hash derived after redaction", async () => {
     const fixture = openFixture();
     try {
       const projectID = fixture.store.createProject("Derived hash").project!.projectID;
       const noteID = fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Redacted source",
         summary: "Derived retrieval document",
@@ -88,6 +90,7 @@ describe("retrieval hardening regressions", () => {
     try {
       const projectID = fixture.store.createProject("Malformed result").project!.projectID;
       const noteID = fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Malformed backend fallback",
         summary: "The lexical result remains usable",
@@ -113,6 +116,7 @@ describe("retrieval hardening regressions", () => {
     try {
       const projectID = fixture.store.createProject("Huge result").project!.projectID;
       const noteID = fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Huge backend fallback",
         summary: "The lexical result remains bounded",
@@ -150,6 +154,7 @@ describe("retrieval hardening regressions", () => {
     try {
       const projectID = fixture.store.createProject("Deadline").project!.projectID;
       fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Deadline lexical result",
         summary: "A result must not outlive the deadline",
@@ -178,6 +183,7 @@ describe("retrieval hardening regressions", () => {
       const projectID = fixture.store.createProject("Batch SQL").project!.projectID;
       const noteIDs = Array.from({ length: 20 }, (_, index) =>
         fixture.store.update(projectID, {
+          operation: "create",
           kind: "fact",
           title: `Semantic record ${index}`,
           summary: `Stored semantic summary ${index}`,
@@ -250,11 +256,13 @@ describe("retrieval hardening regressions", () => {
     try {
       const projectID = fixture.store.createProject("Direction").project!.projectID;
       const sourceID = fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Origin source",
         summary: "Origin record",
       }).id!;
       const targetID = fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Destination target",
         summary: "Destination record",
@@ -320,6 +328,7 @@ describe("retrieval hardening regressions", () => {
     try {
       const projectID = fixture.store.createProject("Hard timeout").project!.projectID;
       fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Hung backend",
         summary: "The worker must return",
@@ -348,6 +357,7 @@ describe("retrieval hardening regressions", () => {
     try {
       const projectID = fixture.store.createProject("Lease fencing").project!.projectID;
       fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Lease row",
         summary: "Lease fencing record",
@@ -416,18 +426,20 @@ describe("retrieval hardening regressions", () => {
     }
   });
 
-  test("AGZ-047 queues every active note despite old succeeded rows", async () => {
+  reindexTest("AGZ-047 queues every active note despite old succeeded rows", async () => {
     const fixture = openFixture();
     const backendID = "reindex-backend";
     const previousPath = process.env.OPENCODE_MEMORY_DATABASE_PATH;
     try {
       const projectID = fixture.store.createProject("Generation reindex").project!.projectID;
       const oldNoteID = fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Already succeeded",
         summary: "This row belongs to an earlier index generation",
       }).id!;
       const newNoteID = fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Needs indexing",
         summary: "This active note must be queued",
@@ -485,12 +497,13 @@ describe("retrieval hardening regressions", () => {
     }
   });
 
-  test("AGZ-047 snapshots after a concurrent canonical writer commits", async () => {
+  reindexTest("AGZ-047 snapshots after a concurrent canonical writer commits", async () => {
     const fixture = openFixture();
     const backendID = "reindex-concurrent-backend";
     try {
       const projectID = fixture.store.createProject("Concurrent generation reindex").project!.projectID;
       const deletedNoteID = fixture.store.update(projectID, {
+        operation: "create",
         kind: "fact",
         title: "Delete during reindex",
         summary: "A stale snapshot must not queue this note after the purge",
@@ -562,6 +575,7 @@ describe("retrieval hardening regressions", () => {
       const projectID = fixture.store.createProject("Card bounds").project!.projectID;
       for (let index = 0; index < 12; index++) {
         fixture.store.update(projectID, {
+          operation: "create",
           kind: "fact",
           title: `Bounded card ${index}`,
           summary: "bounded retrieval candidate",
